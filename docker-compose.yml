@@ -1,0 +1,119 @@
+name: mediapro
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: mediapro-redis
+    restart: unless-stopped
+    networks:
+      - mediapro-net
+    volumes:
+      - mediapro_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  api:
+    image: mediapro-api:latest
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: mediapro-api
+    restart: unless-stopped
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - UPLOAD_DIR=/data/uploads
+      - OUTPUT_DIR=/data/outputs
+      - THUMBNAIL_DIR=/data/thumbnails
+      - IMAGE_UPLOAD_DIR=/data/image_uploads
+      - IMAGE_OUTPUT_DIR=/data/image_outputs
+      - IMAGE_THUMBNAIL_DIR=/data/image_thumbnails
+      - API_PREFIX=/mediapro/api
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
+
+    volumes:
+      - ./backend/app:/app/app
+      - ./data/uploads:/data/uploads
+      - ./data/outputs:/data/outputs
+      - ./data/thumbnails:/data/thumbnails
+      - ./data/image_uploads:/data/image_uploads
+      - ./data/image_outputs:/data/image_outputs
+      - ./data/image_thumbnails:/data/image_thumbnails
+    networks:
+      - mediapro-net
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  worker:
+    image: mediapro-worker:latest
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: mediapro-worker
+    restart: unless-stopped
+    command: celery -A app.celery_app:celery worker --loglevel=info --concurrency=2
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - UPLOAD_DIR=/data/uploads
+      - OUTPUT_DIR=/data/outputs
+      - THUMBNAIL_DIR=/data/thumbnails
+      - IMAGE_UPLOAD_DIR=/data/image_uploads
+      - IMAGE_OUTPUT_DIR=/data/image_outputs
+      - IMAGE_THUMBNAIL_DIR=/data/image_thumbnails
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
+    volumes:
+      - ./backend/app:/app/app
+      - ./data/uploads:/data/uploads
+      - ./data/outputs:/data/outputs
+      - ./data/thumbnails:/data/thumbnails
+      - ./data/image_uploads:/data/image_uploads
+      - ./data/image_outputs:/data/image_outputs
+      - ./data/image_thumbnails:/data/image_thumbnails
+    networks:
+      - mediapro-net
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  proxy:
+    image: mediapro-proxy:latest
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: mediapro-proxy
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "8090:80"
+    networks:
+      - mediapro-net
+
+networks:
+  mediapro-net:
+    name: mediapro-net
+    driver: bridge
+
+volumes:
+  mediapro_redis_data:
+    name: mediapro_redis_data
