@@ -5,7 +5,7 @@ celery = Celery(
     "videoprocessor",
     broker=REDIS_URL,
     backend=REDIS_URL,
-    include=["app.tasks.video_tasks", "app.tasks.image_tasks"],
+    include=["app.tasks.video_tasks", "app.tasks.image_tasks", "app.tasks.face_tasks"],
 )
 
 celery.conf.update(

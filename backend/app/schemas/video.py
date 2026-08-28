@@ -4,8 +4,8 @@ from pydantic import BaseModel
 
 
 class CutRequest(BaseModel):
-    start_time: float
-    end_time: float
+    start_time: Optional[float] = 0.0
+    end_time: Optional[float] = None
     mode: str = "fast"          # "fast" or "accurate"
     audio_mode: str = "keep"    # "keep" or "mute"
     speed: float = 1.0
@@ -14,24 +14,28 @@ class CutRequest(BaseModel):
 
 
 class GifRequest(BaseModel):
-    start_time: float
-    end_time: float
+    start_time: Optional[float] = 0.0
+    end_time: Optional[float] = None
     fps: int = 15
     width: int = 480
     custom_name: Optional[str] = None
 
 
 class AudioRequest(BaseModel):
-    start_time: float
-    end_time: float
-    audio_format: str = "mp3"   # "mp3", "wav", "aac"
-    bitrate: str = "192k"
+    start_time: Optional[float] = 0.0
+    end_time: Optional[float] = None
+    audio_format: Optional[str] = "mp3"   # "mp3", "wav", "aac"
+    format: Optional[str] = None
+    bitrate: Optional[str] = "192k"
     custom_name: Optional[str] = None
+
+    def get_format(self) -> str:
+        return self.format or self.audio_format or "mp3" 
 
 
 class SegmentItem(BaseModel):
-    start_time: float
-    end_time: float
+    start_time: Optional[float] = 0.0
+    end_time: Optional[float] = None
     label: Optional[str] = None
 
 
@@ -41,8 +45,8 @@ class ConcatRequest(BaseModel):
 
 
 class CropRequest(BaseModel):
-    start_time: float
-    end_time: float
+    start_time: Optional[float] = 0.0
+    end_time: Optional[float] = None
     crop_x: Optional[int] = None
     crop_y: Optional[int] = None
     crop_width: Optional[int] = None
@@ -53,8 +57,8 @@ class CropRequest(BaseModel):
 
 
 class BurnInRequest(BaseModel):
-    start_time: float
-    end_time: float
+    start_time: Optional[float] = 0.0
+    end_time: Optional[float] = None
     text: Optional[str] = ""
     timecode_mode: Optional[str] = "none"
     position: Optional[str] = "bottom-right"
@@ -80,8 +84,8 @@ class SilenceJumpCutRequest(BaseModel):
 
 
 class CompressRequest(BaseModel):
-    start_time: float
-    end_time: float
+    start_time: Optional[float] = 0.0
+    end_time: Optional[float] = None
     target_size_mb: Optional[float] = 8.0
     container: Optional[str] = "mp4"
     vcodec: Optional[str] = "h264"
@@ -101,8 +105,8 @@ class SceneSplitRequest(BaseModel):
 
 
 class StabilizeRequest(BaseModel):
-    start_time: float
-    end_time: float
+    start_time: Optional[float] = 0.0
+    end_time: Optional[float] = None
     shakiness: Optional[int] = 6
     smoothing: Optional[int] = 30
     optzoom: Optional[int] = 1
@@ -111,8 +115,8 @@ class StabilizeRequest(BaseModel):
 
 
 class NormalizeAudioRequest(BaseModel):
-    start_time: float
-    end_time: float
+    start_time: Optional[float] = 0.0
+    end_time: Optional[float] = None
     target_i: Optional[float] = -14.0
     true_peak: Optional[float] = -1.0
     lra: Optional[float] = 11.0
@@ -121,8 +125,8 @@ class NormalizeAudioRequest(BaseModel):
 
 
 class BoomerangRequest(BaseModel):
-    start_time: float
-    end_time: float
+    start_time: Optional[float] = 0.0
+    end_time: Optional[float] = None
     loop_count: Optional[int] = 2
     speed: Optional[float] = 1.0
     include_audio: Optional[bool] = False
@@ -140,16 +144,22 @@ class SplitScreenRequest(BaseModel):
 
 
 class ColorGradeRequest(BaseModel):
-    start_time: float
-    end_time: float
+    start_time: Optional[float] = 0.0
+    end_time: Optional[float] = None
     preset: Optional[str] = "none"
+    lut: Optional[str] = None
     brightness: Optional[float] = 0.0
     contrast: Optional[float] = 1.0
     saturation: Optional[float] = 1.0
+    gamma: Optional[float] = 1.0
+    exposure: Optional[float] = 0.0
     temperature: Optional[float] = 0.0
     vignette: Optional[float] = 0.0
     sharpness: Optional[float] = 0.0
     custom_name: Optional[str] = None
+
+    def get_preset(self) -> str:
+        return self.lut or self.preset or "none" 
 
 
 class RescaleRequest(BaseModel):

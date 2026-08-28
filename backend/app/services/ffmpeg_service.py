@@ -1462,8 +1462,8 @@ def normalize_audio_ebu_r128(
 def create_boomerang_loop(
     input_path: str,
     output_path: str,
-    start_time: float,
-    end_time: float,
+    start_time: Optional[float] = 0.0,
+    end_time: Optional[float] = None,
     loop_count: int = 2,
     speed: float = 1.0,
     include_audio: bool = False,
@@ -1472,6 +1472,13 @@ def create_boomerang_loop(
     """
     Generate a seamless ping-pong boomerang video (forward + reverse repeated N times).
     """
+    if end_time is None:
+        try:
+            meta = probe_video(input_path)
+            end_time = float(meta.get("duration", 10.0))
+        except Exception:
+            end_time = 10.0
+    start_time = float(start_time or 0.0)
     duration = max(0.1, end_time - start_time)
     loops = max(1, min(10, int(loop_count)))
     hw = detect_hardware_acceleration()
@@ -1944,3 +1951,72 @@ def rescale_video(
 
 
 
+
+
+def master_audio_stream(
+    input_path: str,
+    output_path: str,
+    audio_filters: str,
+    as_audio_only: bool = False,
+    audio_format: str = "mp3",
+    progress_callback=None,
+) -> str:
+    """Apply parametric EQ, vocal clarity, and broadcast loudness filters to audio."""
+    meta = probe_video(input_path)
+    duration = meta.get('duration', 0.0)
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+    if as_audio_only:
+        cmd = [
+            "ffmpeg", "-y", "-i", input_path,
+            "-vn",
+            "-af", audio_filters,
+        ]
+        if audio_format.lower() == "wav":
+            cmd.extend(["-c:a", "pcm_s16le", output_path])
+        elif audio_format.lower() == "aac":
+            cmd.extend(["-c:a", "aac", "-b:a", "320k", output_path])
+        else:  # mp3
+            cmd.extend(["-c:a", "libmp3lame", "-q:a", "0", output_path])
+    else:
+        # Pass video through untouched (-c:v copy) and re-encode audio stream with filter
+        cmd = [
+            "ffmpeg", "-y", "-i", input_path,
+            "-c:v", "copy",
+            "-af", audio_filters,
+            "-c:a", "aac", "-b:a", "320k",
+            output_path,
+        ]
+
+    cmd.extend(["-progress", "pipe:1", "-nostats"])
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+    spd = "N/A"
+    try:
+        for line in proc.stdout:
+            line = line.strip()
+            if line.startswith("out_time_us="):
+                try:
+                    time_us = int(line.split("=")[1])
+                    curr = time_us / 1_000_000.0
+                    if duration > 0 and progress_callback:
+                        pct = min(99.0, (curr / duration) * 100.0)
+                        progress_callback(pct, spd)
+                except Exception:
+                    pass
+            elif line.startswith("speed="):
+                spd = line.split("=")[1].strip()
+
+        proc.wait(timeout=600)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        raise TimeoutError("Audio mastering timed out")
+
+    if proc.returncode != 0:
+        err = proc.stderr.read()
+        raise RuntimeError(f"Audio mastering failed: {err}")
+
+    if progress_callback:
+        progress_callback(100.0, spd)
+
+    return output_path

@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+﻿import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   ZoomIn,
   ZoomOut,
@@ -13,7 +13,18 @@ import {
   Crosshair,
   Move,
   Check,
+  Upload,
+  Image as ImageIcon,
+  XCircle,
+  RotateCcw,
 } from 'lucide-react';
+
+const DEFAULT_PINS = [
+  [0.08, 0.08], // TL
+  [0.92, 0.08], // TR
+  [0.92, 0.92], // BR
+  [0.08, 0.92], // BL
+];
 
 export default function ImageCanvas({
   activeImage,
@@ -23,11 +34,14 @@ export default function ImageCanvas({
   activeTab = 'transforms',
   perspectivePoints,
   onUpdatePerspectivePoints,
+  onUploadImage,
+  onClearCanvas,
 }) {
   const [zoom, setZoom] = useState(100);
   const [splitPos, setSplitPos] = useState(50);
   const [isDraggingSplit, setIsDraggingSplit] = useState(false);
   const [showSplit, setShowSplit] = useState(false);
+  const fileInputRef = useRef(null);
 
   // Interaction dragging states
   const [draggingPinIdx, setDraggingPinIdx] = useState(null);
@@ -36,6 +50,14 @@ export default function ImageCanvas({
 
   const containerRef = useRef(null);
   const imageWrapperRef = useRef(null);
+
+  // Safe validated Perspective Points
+  const currentPerspectivePts =
+    Array.isArray(perspectivePoints) &&
+    perspectivePoints.length === 4 &&
+    perspectivePoints.every((p) => Array.isArray(p) && p.length >= 2 && !isNaN(p[0]) && !isNaN(p[1]))
+      ? perspectivePoints
+      : DEFAULT_PINS;
 
   // Compute live CSS preview filter
   const getCssFilter = () => {
@@ -65,54 +87,6 @@ export default function ImageCanvas({
     h: toolState?.crop_h !== undefined && toolState?.crop_h !== null ? toolState.crop_h : 0.90,
   };
 
-  // Update crop box when aspect ratio changes in transforms tab
-  useEffect(() => {
-    if (activeTab === 'transforms' && activeImage && toolState?.aspect_ratio && toolState.aspect_ratio !== 'original') {
-      const ratioMap = {
-        '1:1': 1.0,
-        '9:16': 9 / 16,
-        '16:9': 16 / 9,
-        '4:5': 4 / 5,
-        '4:3': 4 / 3,
-      };
-      const targetRatio = ratioMap[toolState.aspect_ratio];
-      if (targetRatio) {
-        const imgRatio = (activeImage.width || 1920) / (activeImage.height || 1080);
-        let w = 0.85;
-        let h = 0.85;
-        if (imgRatio > targetRatio) {
-          // Image is wider than target aspect ratio
-          h = 0.85;
-          w = (h * targetRatio) / imgRatio;
-        } else {
-          // Image is taller than target aspect ratio
-          w = 0.85;
-          h = (w / targetRatio) * imgRatio;
-        }
-        w = Math.min(0.95, Math.max(0.1, w));
-        h = Math.min(0.95, Math.max(0.1, h));
-        const x = (1.0 - w) / 2;
-        const y = (1.0 - h) / 2;
-
-        onUpdateToolState({
-          ...toolState,
-          crop_x: parseFloat(x.toFixed(4)),
-          crop_y: parseFloat(y.toFixed(4)),
-          crop_w: parseFloat(w.toFixed(4)),
-          crop_h: parseFloat(h.toFixed(4)),
-        });
-      }
-    }
-  }, [toolState?.aspect_ratio]);
-
-  // Perspective Points (Default to 8% margin if not provided)
-  const currentPerspectivePts = perspectivePoints || [
-    [0.08, 0.08],  // TL
-    [0.92, 0.08],  // TR
-    [0.92, 0.92],  // BR
-    [0.08, 0.92],  // BL
-  ];
-
   // Drag Handlers
   const handleSplitMouseDown = (e) => {
     e.stopPropagation();
@@ -137,66 +111,68 @@ export default function ImageCanvas({
   };
 
   // Mouse Move
-  const handleMouseMove = useCallback((e) => {
-    if (isDraggingSplit && containerRef.current) {
-      const rect = containerRef.current.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const pct = Math.max(5, Math.min(95, (x / rect.width) * 100));
-      setSplitPos(pct);
-    } else if (draggingPinIdx !== null && imageWrapperRef.current && onUpdatePerspectivePoints) {
-      // Dragging Perspective Corner Pins
-      const rect = imageWrapperRef.current.getBoundingClientRect();
-      const x = Math.max(0, Math.min(rect.width, e.clientX - rect.left));
-      const y = Math.max(0, Math.min(rect.height, e.clientY - rect.top));
-      const normX = parseFloat((x / rect.width).toFixed(4));
-      const normY = parseFloat((y / rect.height).toFixed(4));
+  const handleMouseMove = useCallback(
+    (e) => {
+      if (isDraggingSplit && containerRef.current) {
+        const rect = containerRef.current.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const pct = Math.max(5, Math.min(95, (x / rect.width) * 100));
+        setSplitPos(pct);
+      } else if (draggingPinIdx !== null && imageWrapperRef.current && onUpdatePerspectivePoints) {
+        // Dragging Perspective Corner Pins
+        const rect = imageWrapperRef.current.getBoundingClientRect();
+        const x = Math.max(0, Math.min(rect.width, e.clientX - rect.left));
+        const y = Math.max(0, Math.min(rect.height, e.clientY - rect.top));
+        const normX = parseFloat((x / rect.width).toFixed(4));
+        const normY = parseFloat((y / rect.height).toFixed(4));
 
-      const newPts = [...currentPerspectivePts];
-      newPts[draggingPinIdx] = [normX, normY];
-      onUpdatePerspectivePoints(newPts);
-    } else if (cropDragMode && imageWrapperRef.current && dragStartRef.current) {
-      // Dragging Crop Box Handles or Moving Window
-      const rect = imageWrapperRef.current.getBoundingClientRect();
-      const deltaX = (e.clientX - dragStartRef.current.clientX) / rect.width;
-      const deltaY = (e.clientY - dragStartRef.current.clientY) / rect.height;
-      const initial = dragStartRef.current.crop;
+        const newPts = currentPerspectivePts.map((p, i) => (i === draggingPinIdx ? [normX, normY] : [...p]));
+        onUpdatePerspectivePoints(newPts);
+      } else if (cropDragMode && imageWrapperRef.current && dragStartRef.current) {
+        // Dragging Crop Box Handles
+        const rect = imageWrapperRef.current.getBoundingClientRect();
+        const deltaX = (e.clientX - dragStartRef.current.clientX) / rect.width;
+        const deltaY = (e.clientY - dragStartRef.current.clientY) / rect.height;
+        const initial = dragStartRef.current.crop;
 
-      let newX = initial.x;
-      let newY = initial.y;
-      let newW = initial.w;
-      let newH = initial.h;
+        let newX = initial.x;
+        let newY = initial.y;
+        let newW = initial.w;
+        let newH = initial.h;
 
-      if (cropDragMode === 'move') {
-        newX = Math.max(0, Math.min(1 - newW, initial.x + deltaX));
-        newY = Math.max(0, Math.min(1 - newH, initial.y + deltaY));
-      } else {
-        if (cropDragMode.includes('w')) {
-          const maxLeft = initial.x + initial.w - 0.05;
-          newX = Math.max(0, Math.min(maxLeft, initial.x + deltaX));
-          newW = initial.w - (newX - initial.x);
+        if (cropDragMode === 'move') {
+          newX = Math.max(0, Math.min(1 - newW, initial.x + deltaX));
+          newY = Math.max(0, Math.min(1 - newH, initial.y + deltaY));
+        } else {
+          if (cropDragMode.includes('w')) {
+            const maxLeft = initial.x + initial.w - 0.05;
+            newX = Math.max(0, Math.min(maxLeft, initial.x + deltaX));
+            newW = initial.w - (newX - initial.x);
+          }
+          if (cropDragMode.includes('e')) {
+            newW = Math.max(0.05, Math.min(1 - initial.x, initial.w + deltaX));
+          }
+          if (cropDragMode.includes('n')) {
+            const maxTop = initial.y + initial.h - 0.05;
+            newY = Math.max(0, Math.min(maxTop, initial.y + deltaY));
+            newH = initial.h - (newY - initial.y);
+          }
+          if (cropDragMode.includes('s')) {
+            newH = Math.max(0.05, Math.min(1 - initial.y, initial.h + deltaY));
+          }
         }
-        if (cropDragMode.includes('e')) {
-          newW = Math.max(0.05, Math.min(1 - initial.x, initial.w + deltaX));
-        }
-        if (cropDragMode.includes('n')) {
-          const maxTop = initial.y + initial.h - 0.05;
-          newY = Math.max(0, Math.min(maxTop, initial.y + deltaY));
-          newH = initial.h - (newY - initial.y);
-        }
-        if (cropDragMode.includes('s')) {
-          newH = Math.max(0.05, Math.min(1 - initial.y, initial.h + deltaY));
-        }
+
+        onUpdateToolState({
+          ...toolState,
+          crop_x: parseFloat(newX.toFixed(4)),
+          crop_y: parseFloat(newY.toFixed(4)),
+          crop_w: parseFloat(newW.toFixed(4)),
+          crop_h: parseFloat(newH.toFixed(4)),
+        });
       }
-
-      onUpdateToolState({
-        ...toolState,
-        crop_x: parseFloat(newX.toFixed(4)),
-        crop_y: parseFloat(newY.toFixed(4)),
-        crop_w: parseFloat(newW.toFixed(4)),
-        crop_h: parseFloat(newH.toFixed(4)),
-      });
-    }
-  }, [isDraggingSplit, draggingPinIdx, cropDragMode, currentPerspectivePts, cropBox, onUpdatePerspectivePoints, onUpdateToolState, toolState]);
+    },
+    [isDraggingSplit, draggingPinIdx, cropDragMode, currentPerspectivePts, onUpdatePerspectivePoints, onUpdateToolState, toolState]
+  );
 
   const handleMouseUp = () => {
     setIsDraggingSplit(false);
@@ -219,12 +195,66 @@ export default function ImageCanvas({
     };
   }, [isDraggingSplit, draggingPinIdx, cropDragMode, handleMouseMove]);
 
+  const [isDragOver, setIsDragOver] = useState(false);
+
   if (!activeImage) {
     return (
-      <div className="w-full h-full flex flex-col items-center justify-center bg-white dark:bg-zinc-950 text-slate-400 dark:text-zinc-500 rounded-2xl border border-slate-200 dark:border-zinc-800/80 p-8 shadow-sm dark:shadow-2xl transition-colors">
-        <Sparkles className="w-12 h-12 mb-3 text-cyan-500/50 animate-pulse" />
-        <p className="text-base font-semibold text-slate-700 dark:text-zinc-400">No Image Selected</p>
-        <p className="text-xs text-slate-400 dark:text-zinc-500 mt-1">Upload or select an image from the library to begin editing.</p>
+      <div
+        onDragOver={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          setIsDragOver(true);
+        }}
+        onDragLeave={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          setIsDragOver(false);
+        }}
+        onDrop={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          setIsDragOver(false);
+          if (e.dataTransfer?.files?.[0] && onUploadImage) {
+            onUploadImage(e.dataTransfer.files[0]);
+          }
+        }}
+        className={`w-full h-full min-h-[480px] flex flex-col items-center justify-center rounded-2xl border-2 border-dashed p-8 shadow-sm dark:shadow-2xl transition-all duration-200 ${
+          isDragOver
+            ? 'border-cyan-500 bg-cyan-500/10 scale-[1.01] shadow-2xl shadow-cyan-500/20'
+            : 'border-slate-300 dark:border-zinc-800 bg-white dark:bg-zinc-950 text-slate-400 dark:text-zinc-500'
+        }`}
+      >
+        <div className={`p-4 rounded-3xl mb-4 border transition-all ${
+          isDragOver ? 'bg-cyan-500 text-zinc-950 scale-110' : 'bg-cyan-500/10 text-cyan-500 border-cyan-500/20 animate-pulse'
+        }`}>
+          <ImageIcon className="w-10 h-10" />
+        </div>
+        <p className="text-base font-bold text-slate-800 dark:text-zinc-200">
+          {isDragOver ? 'Drop Image or Document to Open' : 'No Image Loaded in Workspace'}
+        </p>
+        <p className="text-xs text-slate-400 dark:text-zinc-500 mt-1 max-w-sm text-center">
+          Drag & drop any WebP, PNG, JPEG, HEIC, or document scan here, or click below to browse.
+        </p>
+
+        <input
+          type="file"
+          ref={fileInputRef}
+          onChange={(e) => {
+            if (e.target.files?.[0] && onUploadImage) {
+              onUploadImage(e.target.files[0]);
+            }
+          }}
+          accept="image/*,.heic,.webp,.bmp"
+          className="hidden"
+        />
+
+        <button
+          onClick={() => fileInputRef.current?.click()}
+          className="mt-5 px-5 py-2.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-zinc-950 font-bold text-xs flex items-center gap-2 shadow-lg shadow-cyan-500/20 transition active:scale-98"
+        >
+          <Upload className="w-4 h-4" />
+          <span>Upload Image / Document</span>
+        </button>
       </div>
     );
   }
@@ -249,6 +279,12 @@ export default function ImageCanvas({
   const cropPxW = Math.round(cropBox.w * pxWidth);
   const cropPxH = Math.round(cropBox.h * pxHeight);
 
+  // Perspective 4 points in 0-100 percentage scale for SVG viewBox
+  const p0 = [currentPerspectivePts[0][0] * 100, currentPerspectivePts[0][1] * 100];
+  const p1 = [currentPerspectivePts[1][0] * 100, currentPerspectivePts[1][1] * 100];
+  const p2 = [currentPerspectivePts[2][0] * 100, currentPerspectivePts[2][1] * 100];
+  const p3 = [currentPerspectivePts[3][0] * 100, currentPerspectivePts[3][1] * 100];
+
   return (
     <div className="relative w-full h-full flex flex-col bg-white dark:bg-zinc-950 rounded-2xl border border-slate-200 dark:border-zinc-800/80 overflow-hidden shadow-sm dark:shadow-2xl transition-colors">
       {/* Top Canvas Bar */}
@@ -260,25 +296,35 @@ export default function ImageCanvas({
           <span className="text-xs text-slate-600 dark:text-zinc-400 font-mono">
             {pxWidth} × {pxHeight} px
           </span>
-          {activeImage.aspect_ratio && (
-            <span className="text-xs text-slate-400 dark:text-zinc-500">({activeImage.aspect_ratio})</span>
-          )}
 
           {/* Active Overlay Status Badges */}
           {isTransformTab && (
             <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-cyan-500/15 text-cyan-700 dark:text-cyan-300 border border-cyan-500/30 animate-pulse">
-              ✂️ Interactive Crop Box Active ({cropPxW}×{cropPxH} px)
+              Interactive Crop Active ({cropPxW} × {cropPxH} px)
             </span>
           )}
           {isPerspectiveTab && (
             <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/30 animate-pulse">
-              📐 4-Corner Perspective Pinning Active
+              4-Corner Perspective Spotlight Active
             </span>
           )}
         </div>
 
-        {/* Zoom & Split Controls */}
+        {/* Zoom, Clear & Split Controls */}
         <div className="flex items-center gap-2">
+          {onClearCanvas && (
+            <button
+              onClick={onClearCanvas}
+              title="Unload Image & Clear Canvas"
+              className="px-2.5 py-1 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400 border border-rose-500/20 font-bold text-xs flex items-center gap-1 transition-all active:scale-95 shadow-sm"
+            >
+              <XCircle className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Clear Canvas</span>
+            </button>
+          )}
+
+          <div className="h-4 w-px bg-slate-300 dark:bg-zinc-800 mx-0.5" />
+
           {!isTransformTab && !isPerspectiveTab && (
             <>
               <button
@@ -366,7 +412,7 @@ export default function ImageCanvas({
                 onMouseDown={handleSplitMouseDown}
               >
                 <div className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-6 h-6 rounded-full bg-cyan-500 border-2 border-white shadow-lg flex items-center justify-center text-[10px] text-zinc-950 font-black cursor-ew-resize">
-                  ↔
+                  ⟷
                 </div>
               </div>
 
@@ -379,7 +425,7 @@ export default function ImageCanvas({
               </span>
             </div>
           ) : (
-            <div className="relative inline-block">
+            <div className="relative inline-block overflow-hidden rounded-lg">
               {/* Base Image */}
               <img
                 src={currUrl}
@@ -395,7 +441,7 @@ export default function ImageCanvas({
                 <div className="absolute inset-0 z-30 pointer-events-auto overflow-hidden rounded-lg">
                   {/* Dimmed Background Overlay around Crop Box */}
                   <div
-                    className="absolute border-2 border-cyan-400 shadow-[0_0_0_9999px_rgba(0,0,0,0.55)] cursor-move transition-shadow"
+                    className="absolute border-2 border-cyan-400 shadow-[0_0_0_9999px_rgba(0,0,0,0.65)] cursor-move transition-shadow"
                     style={{
                       left: `${cropBox.x * 100}%`,
                       top: `${cropBox.y * 100}%`,
@@ -467,37 +513,50 @@ export default function ImageCanvas({
               )}
 
               {/* ========================================================================= */}
-              {/* OVERLAY 2: INTERACTIVE 4-CORNER PERSPECTIVE PINNING OVERLAY               */}
+              {/* OVERLAY 2: INTERACTIVE 4-CORNER PERSPECTIVE SPOTLIGHT OVERLAY             */}
               {/* ========================================================================= */}
               {isPerspectiveTab && (
                 <div className="absolute inset-0 z-30 pointer-events-auto">
-                  {/* SVG Polygon & Connector Box */}
-                  <svg className="absolute inset-0 w-full h-full pointer-events-none">
+                  {/* SVG Spotlight Dimmed Mask & Boundary Lines */}
+                  <svg
+                    viewBox="0 0 100 100"
+                    preserveAspectRatio="none"
+                    className="absolute inset-0 w-full h-full pointer-events-none"
+                  >
+                    {/* EvenOdd Inverted Dark Mask (Darkens outer background, spotlights document) */}
+                    <path
+                      d={`M 0 0 L 100 0 L 100 100 L 0 100 Z M ${p0[0]} ${p0[1]} L ${p3[0]} ${p3[1]} L ${p2[0]} ${p2[1]} L ${p1[0]} ${p1[1]} Z`}
+                      fill="rgba(0, 0, 0, 0.65)"
+                      fillRule="evenodd"
+                    />
+
+                    {/* Glowing Golden Document Boundary */}
                     <polygon
-                      points={currentPerspectivePts.map((p) => `${p[0] * 100}%,${p[1] * 100}%`).join(' ')}
-                      fill="rgba(245, 158, 11, 0.22)"
+                      points={`${p0[0]},${p0[1]} ${p1[0]},${p1[1]} ${p2[0]},${p2[1]} ${p3[0]},${p3[1]}`}
+                      fill="rgba(245, 158, 11, 0.05)"
                       stroke="#f59e0b"
-                      strokeWidth="2.5"
-                      strokeDasharray="6,4"
+                      strokeWidth="1.2"
+                      strokeDasharray="2,1.5"
                     />
-                    {/* Diagonal Guidelines */}
+
+                    {/* Perspective Center Guidelines */}
                     <line
-                      x1={`${currentPerspectivePts[0][0] * 100}%`}
-                      y1={`${currentPerspectivePts[0][1] * 100}%`}
-                      x2={`${currentPerspectivePts[2][0] * 100}%`}
-                      y2={`${currentPerspectivePts[2][1] * 100}%`}
-                      stroke="rgba(245, 158, 11, 0.3)"
-                      strokeWidth="1"
-                      strokeDasharray="3,3"
+                      x1={`${p0[0]}`}
+                      y1={`${p0[1]}`}
+                      x2={`${p2[0]}`}
+                      y2={`${p2[1]}`}
+                      stroke="rgba(245, 158, 11, 0.35)"
+                      strokeWidth="0.8"
+                      strokeDasharray="1.5,1.5"
                     />
                     <line
-                      x1={`${currentPerspectivePts[1][0] * 100}%`}
-                      y1={`${currentPerspectivePts[1][1] * 100}%`}
-                      x2={`${currentPerspectivePts[3][0] * 100}%`}
-                      y2={`${currentPerspectivePts[3][1] * 100}%`}
-                      stroke="rgba(245, 158, 11, 0.3)"
-                      strokeWidth="1"
-                      strokeDasharray="3,3"
+                      x1={`${p1[0]}`}
+                      y1={`${p1[1]}`}
+                      x2={`${p3[0]}`}
+                      y2={`${p3[1]}`}
+                      stroke="rgba(245, 158, 11, 0.35)"
+                      strokeWidth="0.8"
+                      strokeDasharray="1.5,1.5"
                     />
                   </svg>
 
@@ -513,10 +572,12 @@ export default function ImageCanvas({
                       }}
                     >
                       {/* Pulse Ring */}
-                      <div className="absolute inset-0 -m-1.5 rounded-full bg-amber-400/40 animate-ping pointer-events-none" />
+                      <div className="absolute inset-0 -m-1.5 rounded-full bg-amber-400/50 animate-ping pointer-events-none" />
 
                       {/* Pin Circle */}
-                      <div className={`w-8 h-8 rounded-full bg-gradient-to-tr ${pinColors[idx]} border-2 border-white shadow-2xl flex items-center justify-center text-[10px] font-black text-white transform group-hover:scale-125 transition-transform`}>
+                      <div
+                        className={`w-8 h-8 rounded-full bg-gradient-to-tr ${pinColors[idx]} border-2 border-white shadow-2xl flex items-center justify-center text-[10px] font-black text-white transform group-hover:scale-125 transition-transform`}
+                      >
                         {pinLabels[idx]}
                       </div>
 

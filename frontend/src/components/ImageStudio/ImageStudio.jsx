@@ -11,6 +11,8 @@ export default function ImageStudio({
   onRefreshLibrary,
   onUploadImage,
   onDeleteImage,
+  onClearLibrary,
+  onOpenLibrary,
 }) {
   const [activeImage, setActiveImage] = useState(null);
   const [previewImage, setPreviewImage] = useState(null);
@@ -70,6 +72,47 @@ export default function ImageStudio({
   useEffect(() => {
     localStorage.setItem('vp_image_staged', JSON.stringify(stagedImages));
   }, [stagedImages]);
+
+  const handleUploadAndSelect = async (file) => {
+    if (!file) return null;
+
+    // 1. Instant local preview (0ms UI latency)
+    const localBlobUrl = URL.createObjectURL(file);
+    const tempItem = {
+      id: 'local_' + Date.now(),
+      image_id: 'local_' + Date.now(),
+      filename: file.name,
+      url: localBlobUrl,
+      width: 0,
+      height: 0,
+      is_uploading: true,
+    };
+    setActiveImage(tempItem);
+    setPreviewImage(null);
+
+    // 2. Upload to server in background
+    if (onUploadImage) {
+      try {
+        const data = await onUploadImage(file);
+        if (data) {
+          const fullItem = {
+            ...data,
+            id: data.image_id || data.id,
+            image_id: data.image_id || data.id,
+            url: data.url || `/mediapro/api/image/uploads/${data.filename}`,
+            width: data.width || 0,
+            height: data.height || 0,
+            is_uploading: false,
+          };
+          setActiveImage(fullItem);
+          return fullItem;
+        }
+      } catch (err) {
+        console.error('Upload error in studio:', err);
+      }
+    }
+    return tempItem;
+  };
 
   // Set default active image if available
   useEffect(() => {
@@ -135,7 +178,24 @@ export default function ImageStudio({
   const handlePerspectiveSuccess = (result) => {
     onRefreshLibrary();
     if (result?.url) {
+      const updated = {
+        id: result.output_filename || ('out_' + Date.now()),
+        image_id: result.output_filename || ('out_' + Date.now()),
+        filename: result.output_filename,
+        url: result.url,
+        width: result.width,
+        height: result.height,
+        is_uploading: false,
+      };
+      setActiveImage(updated);
       setPreviewImage(result.url);
+      setPerspectivePoints([
+        [0.08, 0.08],
+        [0.92, 0.08],
+        [0.92, 0.92],
+        [0.08, 0.92],
+      ]);
+      setActiveTab('transforms');
     }
   };
 
@@ -219,10 +279,17 @@ export default function ImageStudio({
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2.5">
+          {isProcessing && (
+            <div className="flex items-center gap-2 px-3.5 py-1.5 rounded-xl bg-cyan-500/10 border border-cyan-500/30 text-cyan-600 dark:text-cyan-400 text-xs font-bold animate-pulse shadow-sm">
+              <Sparkles className="w-3.5 h-3.5 animate-spin text-cyan-500" />
+              <span>Processing in Background...</span>
+            </div>
+          )}
+
           <button
-            onClick={() => setIsLibraryOpen(true)}
-            className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-slate-100 dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 hover:border-cyan-500/40 text-xs font-semibold text-slate-700 dark:text-zinc-200 hover:text-slate-900 dark:hover:text-white transition-all shadow-sm"
+            onClick={onOpenLibrary || (() => setIsLibraryOpen(true))}
+            className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-slate-100 dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 hover:border-cyan-500/40 text-xs font-semibold text-slate-700 dark:text-zinc-200 hover:text-slate-900 dark:hover:text-white transition-all shadow-sm active:scale-95"
           >
             <FolderOpen className="w-4 h-4 text-cyan-600 dark:text-cyan-400" />
             Media Library ({images.length})
@@ -242,6 +309,11 @@ export default function ImageStudio({
             activeTab={activeTab}
             perspectivePoints={perspectivePoints}
             onUpdatePerspectivePoints={setPerspectivePoints}
+            onUploadImage={handleUploadAndSelect}
+            onClearCanvas={() => {
+              setActiveImage(null);
+              setPreviewImage(null);
+            }}
           />
         </div>
 
@@ -258,6 +330,11 @@ export default function ImageStudio({
             perspectivePoints={perspectivePoints}
             onUpdatePerspectivePoints={setPerspectivePoints}
             onPerspectiveSuccess={handlePerspectiveSuccess}
+            onUploadImage={async (file) => {
+              if (onUploadImage) {
+                await handleUploadAndSelect(file);
+              }
+            }}
           />
         </div>
       </div>
@@ -269,7 +346,7 @@ export default function ImageStudio({
           onRemoveStaged={handleRemoveStaged}
           onClearAll={() => setStagedImages([])}
           onOpenBatchModal={() => setIsBatchModalOpen(true)}
-          onOpenLibrary={() => setIsLibraryOpen(true)}
+          onOpenLibrary={onOpenLibrary || (() => setIsLibraryOpen(true))}
           onSelectForEdit={(img) => {
             setActiveImage(img);
             setPreviewImage(null);
@@ -286,7 +363,7 @@ export default function ImageStudio({
           setActiveImage(img);
           setPreviewImage(null);
         }}
-        onUploadImage={onUploadImage}
+        onUploadImage={handleUploadAndSelect}
         onDeleteImage={onDeleteImage}
         onAddToBatch={handleAddToBatch}
       />

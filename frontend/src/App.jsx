@@ -4,8 +4,9 @@ import VideoUploader from './components/VideoUploader';
 import VideoPlayer from './components/VideoPlayer';
 import Timeline from './components/Timeline';
 import CutControls from './components/CutControls';
-import ProgressModal from './components/ProgressModal';
+import GlobalProgressHUD from './components/GlobalProgressHUD';
 import VideoLibrary from './components/VideoLibrary';
+import ImageLibrary from './components/ImageStudio/ImageLibrary';
 import SettingsModal, { DEFAULT_SETTINGS } from './components/SettingsModal';
 import BatchStagingGallery from './components/BatchStagingGallery';
 import BatchProcessModal from './components/BatchProcessModal';
@@ -14,18 +15,23 @@ import GlobalTaskDrawer from './components/GlobalTaskDrawer';
 import { saveFileToDirectory, getActiveDirectoryHandle } from './utils/fileSystem';
 import { useToast } from './context/ToastContext';
 import { useTaskCenter } from './context/TaskContext';
+import HistoryPanel from './components/HistoryPanel';
+import HotkeyModal from './components/HotkeyModal';
+import PresetManagerModal from './components/PresetManagerModal';
+import AudioMasteringModal from './components/AudioMastering/AudioMasteringModal';
+import ScreenRecorderModal from './components/ScreenRecorderModal';
+import FaceExtractorModal from './components/FaceExtractor/FaceExtractorModal';
+import { useHistoryStack } from './hooks/useHistoryStack';
+import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 
 export default function App() {
   const toast = useToast();
-  const { registerBatch } = useTaskCenter();
+  const { registerBatch, toggleDrawer: toggleTaskDrawer } = useTaskCenter();
 
-  // Theme State ('dark' | 'light')
-
+  // Studio Mode & Theming State
   const [theme, setTheme] = useState(() => {
     return localStorage.getItem('vp_theme') || 'dark';
   });
-
-  // Studio Settings State with localStorage persistence
   const [settings, setSettings] = useState(() => {
     try {
       const saved = localStorage.getItem('vp_studio_settings');
@@ -34,20 +40,197 @@ export default function App() {
       return DEFAULT_SETTINGS;
     }
   });
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  // Active Studio Mode ('video' | 'image') with localStorage persistence
   const [activeStudioMode, setActiveStudioMode] = useState(() => {
     return localStorage.getItem('vp_studio_mode') || 'video';
   });
+  const [layoutMode, setLayoutMode] = useState(() => localStorage.getItem('vp_layout_mode') || 'side_by_side');
+  const [hardwareInfo, setHardwareInfo] = useState(null);
+
+  // Video Player & Cutting State
+  const [activeVideo, setActiveVideo] = useState(() => {
+    try {
+      const saved = localStorage.getItem('vp_active_video');
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
+  const [currentTime, setCurrentTime] = useState(0);
+  const [startTime, setStartTime] = useState(0);
+  const [endTime, setEndTime] = useState(0);
+  const [thumbnails, setThumbnails] = useState([]);
+  const [segments, setSegments] = useState([]);
+  const [colorGradeSettings, setColorGradeSettings] = useState(null);
+
+  // Modal Visibility States
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [isHotkeyModalOpen, setIsHotkeyModalOpen] = useState(false);
+  const [isPresetsOpen, setIsPresetsOpen] = useState(false);
+  const [isAudioMasterOpen, setIsAudioMasterOpen] = useState(false);
+  const [isRecorderOpen, setIsRecorderOpen] = useState(false);
+  const [isFaceExtractorOpen, setIsFaceExtractorOpen] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isLibraryOpen, setIsLibraryOpen] = useState(false);
+  const [isLibraryLoading, setIsLibraryLoading] = useState(false);
+  const [isBatchModalOpen, setIsBatchModalOpen] = useState(false);
+  const [isProgressModalOpen, setIsProgressModalOpen] = useState(false);
+
+  // Upload, Processing & Tasks State
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [activeTaskId, setActiveTaskId] = useState(null);
+  const [taskStatus, setTaskStatus] = useState('PENDING');
+  const [taskPercent, setTaskPercent] = useState(0);
+  const [taskSpeed, setTaskSpeed] = useState('');
+  const [taskMessage, setTaskMessage] = useState('');
+  const [taskResult, setTaskResult] = useState(null);
+  const [taskError, setTaskError] = useState(null);
+  const [outputs, setOutputs] = useState([]);
+  const [uploads, setUploads] = useState([]);
+
+  // Batch Staging State
+  const [stagedVideos, setStagedVideos] = useState(() => {
+    try {
+      const saved = localStorage.getItem('vp_staged_videos');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [selectedStagedIds, setSelectedStagedIds] = useState(() => {
+    try {
+      const saved = localStorage.getItem('vp_selected_staged');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [batchJobState, setBatchJobState] = useState(() => {
+    try {
+      const saved = localStorage.getItem('vp_batch_job');
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
+
+  // Image Studio Library State
+  const [imageLibrary, setImageLibrary] = useState([]);
+  const [isImageLoading, setIsImageLoading] = useState(false);
 
   const handleToggleStudioMode = (mode) => {
     setActiveStudioMode(mode);
     localStorage.setItem('vp_studio_mode', mode);
   };
 
-  // Image Studio Library State
-  const [imageLibrary, setImageLibrary] = useState([]);
-  const [isImageLoading, setIsImageLoading] = useState(false);
+  // Multi-Level History Stack
+  const videoHistory = useHistoryStack(
+    { startTime: 0, endTime: 0, segments: [], colorGradeSettings: null },
+    'Initial Project State'
+  );
+  const imageHistory = useHistoryStack(
+    { scale_percent: 100, rotate: 0, flip_h: false, flip_v: false, lut_preset: 'original', brightness: 0, contrast: 1, artistic_filter: 'none' },
+    'Initial Image State'
+  );
+  const activeHistory = activeStudioMode === 'video' ? videoHistory : imageHistory;
+
+  const handleGlobalUndo = () => {
+    if (activeHistory.canUndo) {
+      const prevState = activeHistory.undo();
+      toast.info(`Undid: ${activeHistory.currentLabel}`);
+      if (activeStudioMode === 'video' && prevState) {
+        if (prevState.startTime !== undefined) setStartTime(prevState.startTime);
+        if (prevState.endTime !== undefined) setEndTime(prevState.endTime);
+        if (prevState.segments !== undefined) setSegments(prevState.segments);
+        if (prevState.colorGradeSettings !== undefined) setColorGradeSettings(prevState.colorGradeSettings);
+      }
+    } else {
+      toast.info('Nothing to undo');
+    }
+  };
+
+  const handleGlobalRedo = () => {
+    if (activeHistory.canRedo) {
+      const nextState = activeHistory.redo();
+      toast.info(`Redid: ${activeHistory.currentLabel}`);
+      if (activeStudioMode === 'video' && nextState) {
+        if (nextState.startTime !== undefined) setStartTime(nextState.startTime);
+        if (nextState.endTime !== undefined) setEndTime(nextState.endTime);
+        if (nextState.segments !== undefined) setSegments(nextState.segments);
+        if (nextState.colorGradeSettings !== undefined) setColorGradeSettings(nextState.colorGradeSettings);
+      }
+    } else {
+      toast.info('Nothing to redo');
+    }
+  };
+
+  const handleScreenRecordingComplete = async (file, filename) => {
+    try {
+      toast.info('Uploading screen recording to Media Pro...');
+      const formData = new FormData();
+      formData.append('file', file, filename);
+
+      const res = await fetch('/mediapro/api/media/upload', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!res.ok) {
+        throw new Error('Failed to upload recorded video');
+      }
+
+      const data = await res.json();
+      toast.success('Screen recording saved! Loaded directly into timeline cutter.');
+
+      // Refresh uploads and load into activeVideo
+      await fetchOutputs();
+      handleVideoSelect({
+        id: data.video_id,
+        filename: data.filename,
+        url: data.url || `/mediapro/api/media/upload/${data.video_id}`,
+        metadata: data.metadata,
+      });
+
+      videoHistory.pushState(
+        { startTime: 0, endTime: data.metadata?.duration || 0, segments: [], colorGradeSettings: null },
+        `Screen Record: ${filename}`
+      );
+    } catch (err) {
+      toast.error(`Recording upload failed: ${err.message}`);
+    }
+  };
+
+  // Register Global Hotkeys
+  useKeyboardShortcuts({
+    onUndo: handleGlobalUndo,
+    onRedo: handleGlobalRedo,
+    onEscape: () => {
+      setIsHistoryOpen(false);
+      setIsHotkeyModalOpen(false);
+      setIsSettingsOpen(false);
+      setIsLibraryOpen(false);
+      setIsBatchModalOpen(false);
+      setIsProgressModalOpen(false);
+    },
+    onToggleHistory: () => setIsHistoryOpen((prev) => !prev),
+    onToggleTasks: () => toggleTaskDrawer(),
+    onOpenHotkeyModal: () => setIsHotkeyModalOpen(true),
+    onTogglePresets: () => setIsPresetsOpen((prev) => !prev),
+    onSelectVideoStudio: () => handleToggleStudioMode('video'),
+    onSelectImageStudio: () => handleToggleStudioMode('image'),
+    onToggleLibrary: () => setIsLibraryOpen((prev) => !prev),
+    onSetInPoint: () => {
+      setStartTime(currentTime);
+      videoHistory.pushState({ startTime: currentTime, endTime, segments, colorGradeSettings }, `Set In: ${currentTime.toFixed(2)}s`);
+      toast.info(`In-Point set: ${currentTime.toFixed(2)}s`);
+    },
+    onSetOutPoint: () => {
+      setEndTime(currentTime);
+      videoHistory.pushState({ startTime, endTime: currentTime, segments, colorGradeSettings }, `Set Out: ${currentTime.toFixed(2)}s`);
+      toast.info(`Out-Point set: ${currentTime.toFixed(2)}s`);
+    },
+  });
 
   const fetchImageLibrary = async () => {
     try {
@@ -77,25 +260,65 @@ export default function App() {
         body: formData,
       });
       if (res.ok) {
-        await fetchImageLibrary();
+        const data = await res.json();
+        // Asynchronously update library without blocking UI
+        fetchImageLibrary().catch(() => {});
+        toast.success(`Image "${file.name}" loaded into studio!`);
+        return data;
       }
     } catch (err) {
-      console.error('Error uploading image:', err);
+      toast.error(`Error uploading image: ${err.message}`);
+    }
+    return null;
+  };
+
+  const handleDeleteImageItem = async (itemOrId, itemType) => {
+    try {
+      const isObj = typeof itemOrId === 'object' && itemOrId !== null;
+      const type = isObj ? itemOrId.type : itemType;
+      const id = isObj ? (itemOrId.id || itemOrId.image_id || itemOrId.filename) : itemOrId;
+      const filename = isObj ? itemOrId.filename : itemOrId;
+      const baseStem = filename ? filename.split('.')[0].replace('_thumb', '') : id;
+
+      // Optimistically remove matching item AND any derived outputs sharing this stem
+      setImageLibrary((prev) =>
+        prev.filter((i) => {
+          const iId = i.id || i.image_id || i.filename;
+          const iFile = i.filename || '';
+          if (iId === id || iFile === filename) return false;
+          if (type === 'upload' && (iFile.includes(baseStem) || iId.includes(baseStem))) return false;
+          return true;
+        })
+      );
+
+      const endpoint = type === 'upload'
+        ? `/mediapro/api/image/uploads/${id}`
+        : `/mediapro/api/image/outputs/${filename}`;
+
+      const res = await fetch(endpoint, { method: 'DELETE' });
+      if (res.ok) {
+        toast.success('Image deleted from library.');
+        await fetchImageLibrary();
+      } else {
+        toast.error('Failed to delete image from server.');
+      }
+    } catch (err) {
+      toast.error(`Error deleting image: ${err.message}`);
     }
   };
 
-  const handleDeleteImageItem = async (item) => {
+  const handleClearImageLibrary = async () => {
     try {
-      const endpoint =
-        item.type === 'upload'
-          ? `/mediapro/api/image/uploads/${item.id || item.image_id}`
-          : `/mediapro/api/image/outputs/${item.filename}`;
-      const res = await fetch(endpoint, { method: 'DELETE' });
+      const res = await fetch('/mediapro/api/image/library/clear', { method: 'DELETE' });
       if (res.ok) {
-        setImageLibrary((prev) => prev.filter((i) => i.id !== item.id));
+        setImageLibrary([]);
+        toast.success('All images cleared from library.');
+        await fetchImageLibrary();
+      } else {
+        toast.error('Failed to clear library.');
       }
     } catch (err) {
-      console.error('Error deleting image item:', err);
+      toast.error(`Error clearing library: ${err.message}`);
     }
   };
 
@@ -122,73 +345,7 @@ export default function App() {
     setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
   };
 
-  // Video State with localStorage persistence
-  const [activeVideo, setActiveVideo] = useState(() => {
-    try {
-      const saved = localStorage.getItem('vp_active_video');
-      return saved ? JSON.parse(saved) : null;
-    } catch {
-      return null;
-    }
-  });
-  const [currentTime, setCurrentTime] = useState(0);
-  const [startTime, setStartTime] = useState(0);
-  const [endTime, setEndTime] = useState(0);
-  const [thumbnails, setThumbnails] = useState([]);
 
-  // Multi-Cut Segments Queue
-  const [segments, setSegments] = useState([]);
-
-  // Live Color Grade Preview State
-  const [colorGradeSettings, setColorGradeSettings] = useState(null);
-
-  // Upload State
-  const [isUploading, setIsUploading] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(0);
-
-  // Task & Progress State
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [activeTaskId, setActiveTaskId] = useState(null);
-  const [taskStatus, setTaskStatus] = useState('PENDING');
-  const [taskPercent, setTaskPercent] = useState(0);
-  const [taskSpeed, setTaskSpeed] = useState('');
-  const [taskMessage, setTaskMessage] = useState('');
-  const [taskResult, setTaskResult] = useState(null);
-  const [taskError, setTaskError] = useState(null);
-  const [isProgressModalOpen, setIsProgressModalOpen] = useState(false);
-
-  // Output Library State
-  const [outputs, setOutputs] = useState([]);
-  const [uploads, setUploads] = useState([]);
-  const [isLibraryOpen, setIsLibraryOpen] = useState(false);
-  const [isLibraryLoading, setIsLibraryLoading] = useState(false);
-
-  // Batch Processing & Staging Gallery State with localStorage persistence
-  const [stagedVideos, setStagedVideos] = useState(() => {
-    try {
-      const saved = localStorage.getItem('vp_staged_videos');
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
-  });
-  const [selectedStagedIds, setSelectedStagedIds] = useState(() => {
-    try {
-      const saved = localStorage.getItem('vp_selected_staged_ids');
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
-  });
-  const [isBatchModalOpen, setIsBatchModalOpen] = useState(false);
-  const [batchJobState, setBatchJobState] = useState(() => {
-    try {
-      const saved = localStorage.getItem('vp_last_batch_state');
-      return saved ? JSON.parse(saved) : null;
-    } catch {
-      return null;
-    }
-  });
 
   // Sync to localStorage
   useEffect(() => {
@@ -214,7 +371,6 @@ export default function App() {
   }, [batchJobState]);
 
   // Layout Mode: 'side_by_side' (Split) or 'stacked' (Full Widescreen Stacked)
-  const [layoutMode, setLayoutMode] = useState(() => localStorage.getItem('vp_layout_mode') || 'side_by_side');
 
   const handleToggleLayoutMode = () => {
     setLayoutMode((prev) => {
@@ -225,7 +381,6 @@ export default function App() {
   };
 
   // Hardware Acceleration State
-  const [hardwareInfo, setHardwareInfo] = useState(null);
 
   // Fetch Outputs & Library Media
   const fetchOutputs = async () => {
@@ -1282,6 +1437,11 @@ export default function App() {
         onToggleLayoutMode={handleToggleLayoutMode}
         activeStudioMode={activeStudioMode}
         onToggleStudioMode={handleToggleStudioMode}
+        onToggleHistory={() => setIsHistoryOpen((prev) => !prev)}
+        onOpenHotkeys={() => setIsHotkeyModalOpen(true)}
+        onOpenPresets={() => setIsPresetsOpen(true)}
+        onOpenRecorder={() => setIsRecorderOpen(true)}
+        onOpenFaceExtractor={() => setIsFaceExtractorOpen(true)}
       />
 
       <main
@@ -1389,6 +1549,7 @@ export default function App() {
                   onColorGradeSubmit={handleColorGradeSubmit}
                   onRescaleSubmit={handleRescaleSubmit}
                   onNormalizeAudioSubmit={handleNormalizeAudioSubmit}
+                    onOpenAudioMaster={() => setIsAudioMasterOpen(true)}
                   onBoomerangSubmit={handleBoomerangSubmit}
                   onSplitScreenSubmit={handleSplitScreenSubmit}
                   onColorGradeSettingsChange={setColorGradeSettings}
@@ -1487,6 +1648,7 @@ export default function App() {
                     onColorGradeSubmit={handleColorGradeSubmit}
                     onRescaleSubmit={handleRescaleSubmit}
                     onNormalizeAudioSubmit={handleNormalizeAudioSubmit}
+                    onOpenAudioMaster={() => setIsAudioMasterOpen(true)}
                     onBoomerangSubmit={handleBoomerangSubmit}
                     onSplitScreenSubmit={handleSplitScreenSubmit}
                     onColorGradeSettingsChange={setColorGradeSettings}
@@ -1537,7 +1699,7 @@ export default function App() {
         )}
       </main>
 
-      <ProgressModal
+      <GlobalProgressHUD
         isOpen={isProgressModalOpen}
         status={taskStatus}
         percent={taskPercent}
@@ -1572,7 +1734,7 @@ export default function App() {
       />
 
       <VideoLibrary
-        isOpen={isLibraryOpen}
+        isOpen={isLibraryOpen && activeStudioMode === 'video'}
         onClose={() => setIsLibraryOpen(false)}
         outputs={outputs}
         uploads={uploads}
@@ -1582,6 +1744,18 @@ export default function App() {
         isLoading={isLibraryLoading}
         onUploadFile={handleUploadDirectToLibrary}
         onAddToBatch={handleStageFromLibrary}
+      />
+
+      <ImageLibrary
+        isOpen={isLibraryOpen && activeStudioMode === 'image'}
+        onClose={() => setIsLibraryOpen(false)}
+        images={imageLibrary}
+        onSelectImage={(img) => {
+          fetchImageLibrary();
+        }}
+        onUploadImage={handleUploadImageFile}
+        onDeleteImage={handleDeleteImageItem}
+        onClearLibrary={handleClearImageLibrary}
       />
 
       <SettingsModal
@@ -1594,6 +1768,116 @@ export default function App() {
 
       {/* Global Background Task Center & Telemetry Drawer */}
       <GlobalTaskDrawer />
+
+      {/* AI Unique Face Extractor & Best-Shot Gallery Modal (Plan 08) */}
+      <FaceExtractorModal
+        isOpen={isFaceExtractorOpen}
+        onClose={() => setIsFaceExtractorOpen(false)}
+        activeVideo={activeVideo}
+        onSeekTime={(seconds) => {
+          setCurrentTime(seconds);
+          const videoElement = document.querySelector('video');
+          if (videoElement) {
+            videoElement.currentTime = seconds;
+          }
+        }}
+        onSendToImageStudio={(imgObj) => {
+          setActiveStudioMode('image');
+          setImageLibrary((prev) => [imgObj, ...prev.filter(i => i.id !== imgObj.id)]);
+          toast.success(`Loaded ${imgObj.filename} into Image Studio!`);
+        }}
+        showNotification={(msg, type) => {
+          if (type === 'success') toast.success(msg);
+          else if (type === 'error') toast.error(msg);
+          else if (type === 'warning') toast.warning(msg);
+          else toast.info(msg);
+        }}
+      />
+
+      {/* Screen & Camera Recording Studio Modal */}
+      <ScreenRecorderModal
+        isOpen={isRecorderOpen}
+        onClose={() => setIsRecorderOpen(false)}
+        onRecordingComplete={handleScreenRecordingComplete}
+      />
+
+      {/* Advanced Audio Mastering Studio Modal */}
+      <AudioMasteringModal
+        isOpen={isAudioMasterOpen}
+        onClose={() => setIsAudioMasterOpen(false)}
+        activeVideo={activeVideo}
+        currentTime={currentTime}
+        onSeek={(time) => {
+          setCurrentTime(time);
+          const videoElement = document.querySelector('video');
+          if (videoElement) {
+            videoElement.currentTime = time;
+          }
+        }}
+        onMasterComplete={(data) => {
+          fetchOutputs();
+          toast.success(`Audio master generated: ${data.output_filename}`);
+        }}
+      />
+
+      {/* Visual Action History Drawer */}
+      <HistoryPanel
+        isOpen={isHistoryOpen}
+        onClose={() => setIsHistoryOpen(false)}
+        history={activeHistory.history}
+        currentIndex={activeHistory.currentIndex}
+        canUndo={activeHistory.canUndo}
+        canRedo={activeHistory.canRedo}
+        onUndo={handleGlobalUndo}
+        onRedo={handleGlobalRedo}
+        onJumpTo={(index) => {
+          const jumpedState = activeHistory.jumpTo(index);
+          if (activeStudioMode === 'video' && jumpedState) {
+            if (jumpedState.startTime !== undefined) setStartTime(jumpedState.startTime);
+            if (jumpedState.endTime !== undefined) setEndTime(jumpedState.endTime);
+            if (jumpedState.segments !== undefined) setSegments(jumpedState.segments);
+            if (jumpedState.colorGradeSettings !== undefined) setColorGradeSettings(jumpedState.colorGradeSettings);
+          }
+        }}
+        onReset={() => {
+          activeHistory.resetHistory(activeHistory.history[0]?.state || {}, 'Reset');
+          toast.info('History stack reset');
+        }}
+        studioMode={activeStudioMode}
+      />
+
+      {/* Interactive Keyboard Shortcuts Cheatsheet Modal */}
+      <HotkeyModal
+        isOpen={isHotkeyModalOpen}
+        onClose={() => setIsHotkeyModalOpen(false)}
+      />
+
+      {/* Export Preset Manager & Recipes Modal */}
+      <PresetManagerModal
+        isOpen={isPresetsOpen}
+        onClose={() => setIsPresetsOpen(false)}
+        activeStudioMode={activeStudioMode}
+        onApplyPreset={(preset) => {
+          if (preset.type === 'video') {
+            const p = preset.params || {};
+            if (p.operation === 'colorgrade') {
+              setColorGradeSettings({
+                preset: p.preset || 'teal_orange',
+                contrast: p.contrast || 1.15,
+                saturation: p.saturation || 1.1,
+                vignette: p.vignette || 0.35,
+              });
+            }
+            videoHistory.pushState({ startTime, endTime, segments, colorGradeSettings }, `Apply Preset: ${preset.name}`);
+          }
+          toast.success(`Loaded recipe: ${preset.name}`);
+        }}
+        currentStudioParams={{
+          colorGradeSettings,
+          startTime,
+          endTime,
+        }}
+      />
     </div>
   );
 }

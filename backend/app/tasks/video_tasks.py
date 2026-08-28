@@ -20,6 +20,7 @@ from app.services.ffmpeg_service import (
     create_split_screen_comparison,
     color_grade_video,
     rescale_video,
+    master_audio_stream,
 )
 from app.config import THUMBNAIL_DIR, OUTPUT_DIR
 
@@ -883,3 +884,43 @@ def rescale_video_task(
 
 
 
+
+
+@celery.task(bind=True, name="tasks.master_audio")
+def master_audio_task(
+    self,
+    input_path: str,
+    output_path: str,
+    audio_filters: str,
+    as_audio_only: bool = False,
+    audio_format: str = "mp3",
+    output_filename: str = "",
+) -> dict:
+    def progress_callback(pct, speed):
+        self.update_state(
+            state="PROGRESS",
+            meta={
+                "percent": round(pct, 1),
+                "speed": speed,
+                "status": "Mastering audio & EQ...",
+            },
+        )
+
+    try:
+        res = master_audio_stream(
+            input_path=input_path,
+            output_path=output_path,
+            audio_filters=audio_filters,
+            as_audio_only=as_audio_only,
+            audio_format=audio_format,
+            progress_callback=progress_callback,
+        )
+        return {
+            "status": "COMPLETED",
+            "output_path": res,
+            "output_filename": output_filename,
+            "url": f"/mediapro/api/outputs/{output_filename}",
+        }
+    except Exception as e:
+        self.update_state(state="FAILURE", meta={"error": str(e)})
+        raise

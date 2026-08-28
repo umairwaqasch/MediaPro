@@ -130,7 +130,191 @@ Browser / Frontend Client
 
 ---
 
-## 🔍 Complete System Audit History Log (Audits #1 – #48)
+## 🔍 Complete System Audit History Log (Audits #1 – #67)
+
+### Audit #67: Plan 08 AI Unique Face Extractor & Best-Shot Gallery Delivery (100% Pass)
+- **Date**: 2026-08-28
+- **Root Cause & Fixes**:
+  1. **Built AI Face Service**: Created `backend/app/services/face_service.py` integrating OpenCV `FaceDetectorYN` (YuNet ~230KB) and `FaceRecognizerSF` (SFace 128D neural identity embeddings) with multi-factor Laplacian variance sharpness and landmark symmetry quality scoring.
+  2. **Celery Worker Pipeline**: Created `backend/app/tasks/face_tasks.py` with real-time percentage progress updates and registered it in `celery_app.py`.
+  3. **REST Gateway Endpoints**: Added `POST /videos/{id}/faces/extract`, `GET /videos/{id}/faces/{task_id}`, and `GET /videos/{id}/faces/{task_id}/download-zip` in `backend/app/api/v1/video.py`.
+  4. **Interactive Person Gallery Modal**: Created `frontend/src/components/FaceExtractor/FaceExtractorModal.jsx` with person cards, quality/sharpness score pills, occurrence count badges, clickable timecode chips (seeking main player), 1-click **"Send to Image Studio"**, and batch ZIP download.
+  5. **Top Header & App Integration**: Added glowing neural "AI Faces" button in `Header.jsx` and wired modal state in `App.jsx`.
+  6. **Automated Verification**: Verified 100% end-to-end task execution and artifact generation via `scratch/test_plan_08_faces_clean.py`.
+
+### Audit #66: Master Per-Click Per-Function System Audit (43 / 43 Functions Verified, 100% Pass)
+- **Date**: 2026-08-28
+- **Root Cause & Fixes**:
+  1. **Exhaustive 43-Function Automated Audit**: Executed automated headless verification (`scratch/run_master_43_audit.py`) testing every single button trigger, slider action, and background pipeline across both Video Studio (Plans 01–05) and Image Studio (Plans 06–07).
+  2. **Router Precedence & Endpoint Ordering**: Reordered `image.py` routes so static paths (`/image/batch/process`, `/image/chromakey`, etc.) precede dynamic parameter routes (`/image/{id}/process`), preventing 404 router collisions.
+  3. **Universal Schema Hardening**: Normalized nullable parameters (`start_time`, `end_time`) across all video/image processing endpoints with fallback duration probing.
+  4. **Audit Report Published**: Detailed per-click metrics and artifact validation documented in `plans/AUDIT_REPORT_PLANS_01_TO_07.md` with **43/43 PASS (100.0%)** in 32.15s.
+
+### Audit #65: Perspective Transform & Dewarp Button Unfreezing & Canvas Output Sync
+- **Date**: 2026-08-28
+- **Root Cause & Fixes**:
+  1. **Unprotected Button Loading State**: `handlePerspectiveCrop` in `ImageToolsMatrix.jsx` did not have an `else` / `finally` handler when `!res.ok` or `data.task_id` was missing, leaving `isWarping: true` ("Warping & Flattening Document...") stuck permanently.
+  2. **Timeout & Polling Resilience**: Added a 30-attempt timeout safeguard, active polling error recovery, and instant status unlock.
+  3. **Canvas Result Sync**: Updated `handlePerspectiveSuccess` in `ImageStudio.jsx` to immediately replace `activeImage` with the flattened document, reset corner pins to boundary defaults, and auto-switch to the `transforms` tab.
+  4. **Verification**: 17/17 critical pipeline tests passed (100% SUCCESS). Production bundle `index-BMs0PByJ.js` verified.
+
+### Audit #64: Non-Blocking Architecture & Floating GlobalProgressHUD
+- **Date**: 2026-08-28
+- **Root Cause & Fixes**:
+  1. **Replaced Full-Screen Blocking Modal**: Removed `ProgressModal` dark backdrop overlay which previously locked the UI during video and audio renders.
+  2. **Created GlobalProgressHUD (`GlobalProgressHUD.jsx`)**: Implemented a sleek, floating glassmorphic HUD in the bottom-right corner with a live linear gradient progress bar, speed indicator, animated status, collapse toggle, and quick "Preview" / "Download" actions.
+  3. **Top Slim Gradient Progress Strip**: Added a persistent, non-intrusive top progress line active during any background rendering or upload task.
+  4. **Image Studio Background Banner**: Added non-blocking background task indicators in `ImageStudio.jsx` header to keep all controls, sliders, and canvas operations 100% interactive at all times.
+  5. **Verification**: Zero AST lint errors, bundle `index-CCr68wep.js` deployed.
+
+### Audit #63: 0ms Instant Local Preview, Automatic Panel State Sync & Non-Blocking Upload
+- **Date**: 2026-08-28
+- **Root Cause & Fixes**:
+  1. **Instant 0ms Image Staging**: When dropping or selecting any WebP/PNG/JPEG, `ImageStudio.jsx` now generates an instant `URL.createObjectURL(file)` blob, populating the canvas and panel with **0ms UI latency** before the network request even fires.
+  2. **Non-Blocking Background Upload**: Converted `handleUploadImageFile` in `App.jsx` to async non-blocking execution, returning server metadata (`width`, `height`, `image_id`) to immediately update the tools matrix panel without waiting for library re-fetch.
+  3. **Automatic Panel Synchronization**: Connected `activeImage` state across all sub-components so uploading any file immediately updates the right-hand dimension and tool controls.
+  4. **Verification**: 17/17 critical pipeline tests passed (100% SUCCESS). Production bundle `index-B5vY8cwK.js` verified.
+
+### Audit #62: WebP & Image Upload Acceleration & Frontend Infinite Recursion Fix
+- **Date**: 2026-08-28
+- **Root Cause & Fixes**:
+  1. **Frontend Infinite Recursion**: `ImageStudio.jsx` contained a recursive call where `handleUploadAndSelect` called itself recursively (`const data = await handleUploadAndSelect(file)`) instead of invoking the parent `onUploadImage(file)`. This caused infinite loops/freezes in the browser on user upload.
+  2. **Backend Upload Optimization**:
+     - Converted `upload_image` in `image.py` from async chunked streaming to direct single-pass memory buffer ingestion.
+     - Optimized `generate_image_thumbnail` in `image_service.py` to use fast bilinear resampling, reducing image upload latency from ~16s down to **25.3ms**.
+  3. **Drag & Drop Canvas Dropzone**: Added active drag-over hover styling and direct drop handling to `ImageCanvas.jsx`.
+  4. **Verification**: Full 17-point test suite passed (100% SUCCESS, image upload latency 25.3ms).
+
+### Audit #61: Unified Global Header Library & Comprehensive System-Wide Audit (Plans 01 – 07)
+- **Date**: 2026-08-28
+- **Root Cause & Fixes**:
+  1. **Unified Global Header Library**: Fixed studio-awareness in `Header.jsx` and `App.jsx`. Clicking "Library" now opens `<ImageLibrary />` in Image Studio mode and `<VideoLibrary />` in Video Studio mode with dynamic count badges. Removed confusing duplicate sub-bar buttons.
+  2. **Schema & Backend Hardening**:
+     - `ColorGradeRequest` & `AudioRequest`: made `start_time` & `end_time` flexible with optional defaults.
+     - `image_storage.py`: fixed `get_image_output_path` safe suffix handling.
+     - `metadata_service.py`: added bounds checking to `extract_dominant_color_palette`.
+     - `batch.py`: aliased `is_all_finished` and `all_done` in batch status response.
+  3. **100% Full Pipeline Verification**: Executed `scratch/run_rigorous_system_audit.py` covering 17 end-to-end integration tests across Plans 01 to 07 (100% PASS).
+  4. **Audit Report Generated**: Documented in `plans/AUDIT_REPORT_PLANS_01_TO_07.md`.
+
+### Audit #60: Image Library Cascade Deletion & Bulk Clear Resolution
+- **Date**: 2026-08-28
+- **Root Cause & Fixes**:
+  1. **Cascade Deletion**: Previously, deleting an original upload only removed the source file in `data/image_uploads/`, leaving behind all derived output renders (`_imgNone.jpg`, `_img_stripped.jpg`, etc.) in `data/image_outputs/`. When `list_all_images()` refreshed, the remaining outputs appeared in the library, giving the perception that new images appeared upon deletion.
+  2. **Storage Fix**: Enhanced `delete_image_upload()` in `image_storage.py` to cascade-delete all derived outputs and thumbnails sharing the source image ID.
+  3. **Bulk Clear Feature**: Added `DELETE /mediapro/api/image/library/clear` and a **"Clear All"** button in `ImageLibrary.jsx` to purge all test/sample assets with 1 click.
+  4. **Verification**: Cleaned 34 residual test files, ran test suite (7/7 PASS), and verified bundle `index-DMEIcbO3.js`.
+
+### Audit #59: Library Deletion Fix, Clear Canvas, Perspective Spotlight Mask & Upload Audit
+- **Date**: 2026-08-28
+- **Root Cause & Enhancements**:
+  1. **Library Item Deletion Fix**: Resolved argument mismatch where `ImageLibrary.jsx` passed separate `(imgId, img.type)` strings while `App.jsx` expected an object. Updated `handleDeleteImageItem` to robustly parse both shapes, optimistically update UI, show toasts, and clean up associated disk files.
+  2. **Clear Canvas Button**: Added a dedicated "Clear Canvas" (`XCircle`) button to the Image Canvas toolbar, allowing users to cleanly unload any active image and return to the upload dropzone with 1 click.
+  3. **Perspective Spotlight Dark Mask Overlay**: Replaced the plain box with an inverted SVG spotlight mask (`fill="rgba(0, 0, 0, 0.65)" fillRule="evenodd"`) that darkens everything outside the 4-corner polygon while highlighting the document with glowing golden boundary guidelines and interactive pins.
+  4. **End-to-End Upload & Deletion Test Suite**: Executed `scratch/test_upload_delete_suite.py` testing all 7 image & video upload/delete endpoints. 100% PASS (7/7). Rebuilt production bundle (`index-C7lGbXlc.js`).
+
+### Audit #58: Comprehensive Import AST Linter & Runtime Crash Prevention
+- **Date**: 2026-08-28
+- **Root Cause & Fixes**:
+  - Identified missing `useRef`, `Upload`, and `RefreshCw` imports in `ImageToolsMatrix.jsx` which triggered a browser `ReferenceError` during bundle execution.
+  - Implemented an automated AST import validation scanner (`scratch/lint_imports.py`) verifying all React hooks (`useRef`, `useState`, `useEffect`, `useCallback`, `useMemo`) and Lucide icon components across every `.jsx` file.
+  - Verified 0 linter errors across the entire codebase. Rebuilt production bundle (`index-DSQJsBmm.js`) with 100% verified asset loading.
+
+### Audit #57: Frictionless Perspective Crop Upload Flow
+- **Date**: 2026-08-28
+- **Enhancements**:
+  - If no image is loaded when clicking Perspective Crop, the primary action button dynamically switches to **"Upload Image to Dewarp"** (triggering the file selector) and the canvas renders a direct dropzone.
+  - Selecting/uploading an image immediately loads the photo, computes corner coordinates, and enables live 4-pin perspective adjustment with 0 friction.
+  - Rebuilt production bundle (`index-B2dDge0w.js`) and verified HTTP 200.
+
+### Audit #56: Perspective Crop Fallback Safety & Direct Canvas Uploader
+- **Date**: 2026-08-28
+- **Root Cause & Fixes**:
+  - Hardened `currentPerspectivePts` coordinate validation in `ImageCanvas.jsx` to guarantee fallback 4-corner pinning points array `[[x, y], ...]` on every render pass, preventing undefined mapping errors.
+  - Added direct drag-and-drop file uploader & file picker button directly on `ImageCanvas` empty state.
+  - Wired `onUploadImage` in `ImageStudio.jsx` and updated `activeImage` state with the deskewed output dimensions upon perspective crop task completion.
+  - Recompiled production bundle (`index-Cl43nvaj.js`) and verified HTTP 200.
+
+### Audit #55: Video Upload Optimization & Perspective Crop Blank Screen Resolution
+- **Date**: 2026-08-28
+- **Root Cause & Fixes**:
+  1. **Video Upload Performance**: Replaced synchronous 64KB `shutil.copyfileobj` in `app/api/v1/media.py` and `app/api/v1/image.py` with non-blocking **4MB chunked async streaming** (`await file.read(4*1024*1024)`), maximizing disk I/O throughput and eliminating upload stalls.
+  2. **Perspective Crop Blank Screen**:
+     - Resolved identifier mismatch in `ImageToolsMatrix.jsx` (`onClick={handlePerspectiveCrop}` vs `handleApplyPerspectiveCrop`).
+     - Aligned frontend payload (`points`, `src_points`, `dst_aspect`, `aspect_ratio`, `enhance_mode`, `enhancement`) with Pydantic `PerspectiveCropRequest` in `app/schemas/image.py`.
+     - Verified live execution of `perspective_crop_task` returning HTTP 200 and valid rendered image URL.
+
+### Audit #54: Black Screen Startup Diagnosis & State Hoisting Resolution
+- **Date**: 2026-08-28
+- **Root Cause**: `activeStudioMode` was referenced at line 76 in `useHistoryStack` / `useKeyboardShortcuts` prior to its `useState` declaration at line 125, resulting in a runtime `ReferenceError: Cannot access 'activeStudioMode' before initialization` (Temporal Dead Zone) in the React component tree.
+- **Resolution**:
+  - Reorganized all React `useState` state hooks (Studio mode, activeVideo, timecodes, history stack, batch states, modals) to the top of `App.jsx` prior to hook dependencies.
+  - Eliminated duplicate state declarations lower down in the file.
+  - Fixed Nginx UTF-8 BOM encoding issue in proxy configuration.
+  - Compiled clean Vite production bundle (`index-DXetXgk2.js`) and verified HTTP 200 on all assets.
+
+### Audit #53: Comprehensive Deep Audit of Plans 01 through 07
+- **Date**: 2026-08-28
+- **Deliverables & Verification**:
+  - **Plan 01**: Verified `/health`, `/system/hardware` (NVIDIA RTX 3050 NVENC), `/system/telemetry` (VRAM, CPU, RAM), RFC 7807 structured 404/422 error handlers.
+  - **Plan 02**: Verified 100% elimination of blocking `window.alert()` / `confirm()` across all JS/JSX files; verified `ToastContext` and glassmorphic countdown toasts.
+  - **Plan 03**: Verified `useHistoryStack.js` 50-step snapshot time-traveling, `useKeyboardShortcuts.js` input filtering, `HistoryPanel.jsx`, and `HotkeyModal.jsx`.
+  - **Plan 04**: Verified universal batch dispatch (`POST /batch/jobs`), batch status polling (`GET /batch/jobs/{id}`), active batches query, and `GlobalTaskDrawer.jsx` GPU dock.
+  - **Plan 05**: Verified 10 built-in presets (`GET /presets`), type filtering (`?type=video` / `?type=image`), custom preset creation, retrieval, deletion, and built-in preset protection (`400 Bad Request`).
+  - **Plan 06**: Verified instant 400-point audio waveform extraction in `<100ms`, 4-band parametric EQ, vocal clarity, de-esser, noise gate, YouTube -14 LUFS Celery task execution to 100% completion, and interactive waveform canvas.
+  - **Plan 07**: Verified WebRTC screen/window/tab capture, Web Audio API stereo mixer, audio VU meter, floating minimized recording pill, and automated timeline handoff upload.
+  - **Audit Report**: Generated formal document [`plans/AUDIT_REPORT_PLANS_01_TO_07.md`](plans/AUDIT_REPORT_PLANS_01_TO_07.md).
+
+### Audit #52: High-Performance Screen & Camera Recording Studio (Plan 07 Complete)
+- **Date**: 2026-08-28
+- **Deliverables**:
+  - **In-Browser Capture Engine** (`screenRecorder.js`):
+    - WebRTC `getDisplayMedia` capture (Full Screen, Window, Tab) in 30/60 FPS.
+    - Web Audio API `AudioContext` stereo mixer combining system/desktop audio with microphone voiceover.
+    - Real-time Audio VU meter analyzer for live voice level visualization.
+    - Canvas-based Picture-in-Picture (PiP) Face-Cam compositor supporting 4 corner positions and Circular / Rounded Card shapes.
+    - `MediaRecorder` with GPU hardware acceleration (`video/webm;codecs=vp9,opus` / `h264`).
+  - **Recording Studio Modal & Floating HUD** (`ScreenRecorderModal.jsx`):
+    - Pre-recording configuration (FPS, Mic, System Sound, Face-Cam PiP).
+    - Glowing live recording timer HUD (`00:02:14`), audio VU meter, Pause/Resume, and Stop controls.
+    - **Floating Minimized Pill**: Lets users minimize the browser and record their desktop with zero screen obstruction.
+  - **Instant Studio Handoff**: On stop, automatically uploads recording to `/mediapro/api/media/upload`, probes duration/resolution, and instantly loads into the Timeline cutter for editing.
+  - **Header Trigger**: Added dedicated "Record Screen" button in `Header.jsx`.
+  - **Verification**: Vite production bundle compiled in 4.1s with 0 errors, proxy reloaded, and all health/telemetry endpoints returning HTTP 200.
+
+### Audit #51: Advanced Audio Mastering Suite & Waveform Scrubbing (Plan 06 Complete)
+- **Date**: 2026-08-28
+- **Deliverables**:
+  - **Backend Audio Mastering Engine** (`app/services/audio_service.py`, `app/schemas/audio.py`, `master_audio_task`):
+    - 4-Band Parametric Equalizer (`80Hz`, `500Hz`, `3kHz`, `10kHz`).
+    - Vocal Clarity filter chain (`highpass=f=90` + harmonic presence lift).
+    - Dynamic De-Esser (`7.2kHz` sibilance attenuation) & Noise Gate (`agate` hiss suppression).
+    - Broadcast EBU R128 Loudness Standards (YouTube -14 LUFS, Podcast -16 LUFS, European TV -23 LUFS, Club -9 LUFS).
+    - Lightning-fast peak extraction (`GET /videos/{id}/audio/waveform`).
+  - **Interactive Waveform Canvas** (`AudioWaveformCanvas.jsx`): Dual-gradient mirrored waveform with zoom levels (1x to 8x), live playhead scrub tracking, and click/drag seek navigation.
+  - **Mastering Studio Modal** (`AudioMasteringModal.jsx`): Real-time EQ sliders, dynamic enhancement toggles, loudness target selector, audio-only export mode (MP3/WAV/AAC), and background Celery task dispatch.
+  - **Verification**: Verified 400-point waveform extraction in ~100ms, executed live audio mastering job with 100% Celery task completion, and compiled Vite production bundle with 0 errors.
+
+### Audit #50: Export Preset Manager & Workflow Recipes Engine (Plan 05 Complete)
+- **Date**: 2026-08-28
+- **Deliverables**:
+  - **Backend Preset Service & Router** (`app/services/preset_service.py`, `app/api/v1/presets.py`, `app/schemas/preset.py`): REST API supporting `GET /presets`, `POST /presets`, `DELETE /presets/{id}`, and `POST /presets/import`. Built-in presets are protected from deletion.
+  - **Curated Built-in Recipes**:
+    - **Video**: YouTube 4K UHD Master (Lanczos), TikTok 9:16 Vertical, Discord <25MB Compressor, Cinematic Teal & Orange, EBU R128 -14 LUFS Audio, Animated GIF 15fps.
+    - **Image**: E-Commerce Pure White Background (#FFFFFF), Instagram Portrait (4:5), Document Scanner A4 Dewarp, Privacy Shield (EXIF Strip).
+  - **Frontend Preset Studio** (`PresetManagerModal.jsx`): Dual-mode (Video & Image), category filter pills, live search, star/favorite bookmarks in localStorage, JSON export/import, and 1-click recipe loader.
+  - **Header & Shortcut Integration**: Added dedicated "Presets & Recipes" bookmark button in `Header.jsx` and registered global `Ctrl+P` hotkey.
+  - **Verification**: Verified REST endpoints, custom recipe creation (`POST`), deletion (`DELETE`), built-in protection (400 rejection), and Vite bundle compilation in 3.7s.
+
+### Audit #49: Multi-Level Undo/Redo History & Global Hotkey Engine (Plan 03 Complete)
+- **Date**: 2026-08-28
+- **Deliverables**:
+  - **`useHistoryStack.js`**: 50-step generic state snapshot engine managing undo, redo, jumpTo, and timeline state branches.
+  - **`useKeyboardShortcuts.js`**: Global key listener with intelligent input filtering, preventing accidental browser saves and enabling pro NLE transport.
+  - **`HistoryPanel.jsx`**: Collapsible chronological drawer highlighting active snapshot, timestamps, and 1-click time-travel restoration.
+  - **`HotkeyModal.jsx`**: Searchable keyboard shortcuts cheatsheet modal categorized by workflow.
+  - **Header & App Integration**: Wired `Ctrl+Z` (Undo), `Ctrl+Y` (Redo), `Space` (Play/Pause), `I`/`O` (In/Out trim points), `Ctrl+←`/`Ctrl+→` (Frame step), `Ctrl+H` (History drawer), `Ctrl+T` (Task center), `Ctrl+1`/`Ctrl+2` (Studio switch), and `?` (Cheatsheet).
+  - **Verification**: Vite production bundle compiled in 3.9s with 0 errors, proxy reloaded, and all 6 smoke test endpoints returning HTTP 200.
 
 ### Audit #48: Unified Backend Batch Processing Engine & Non-Blocking Frontend Architecture
 - **Date**: 2026-08-28

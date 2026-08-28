@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Crop,
   Sliders,
@@ -24,6 +24,8 @@ import {
   Image as ImageIcon,
   FileText,
   Scan,
+  Upload,
+  RefreshCw,
 } from 'lucide-react';
 import { useToast } from '../../context/ToastContext';
 
@@ -71,6 +73,7 @@ export default function ImageToolsMatrix({
   perspectivePoints,
   onUpdatePerspectivePoints,
   onPerspectiveSuccess,
+  onUploadImage,
 }) {
   const toast = useToast();
   const [exifData, setExifData] = useState(null);
@@ -88,6 +91,7 @@ export default function ImageToolsMatrix({
   const [perspectiveAspect, setPerspectiveAspect] = useState('auto');
   const [perspectiveEnhance, setPerspectiveEnhance] = useState('none');
   const [isDetectingCorners, setIsDetectingCorners] = useState(false);
+  const matrixFileInputRef = useRef(null);
   const [isWarping, setIsWarping] = useState(false);
 
   const update = (key, val) => {
@@ -197,25 +201,46 @@ export default function ImageToolsMatrix({
   };
 
   // Phase 4: Flatten and Dewarp
-  const handleApplyPerspectiveCrop = async () => {
+  const handlePerspectiveCrop = async () => {
     if (!activeImage || !perspectivePoints || perspectivePoints.length !== 4) return;
     const imgId = activeImage.image_id || activeImage.id;
+    if (!imgId || String(imgId).startsWith('local_')) {
+      toast.info('Image is preparing. Please retry in a moment.');
+      return;
+    }
     setIsWarping(true);
     try {
       const res = await fetch(`/mediapro/api/image/${imgId}/perspective/crop`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          src_points: perspectivePoints,
           points: perspectivePoints,
+          dst_aspect: perspectiveAspect,
           aspect_ratio: perspectiveAspect,
+          enhance_mode: perspectiveEnhance,
           enhancement: perspectiveEnhance,
           output_format: toolState.output_format || 'JPEG',
           quality: toolState.quality || 95,
         }),
       });
       const data = await res.json();
-      if (data.task_id) {
-        const interval = setInterval(async () => {
+      if (!res.ok || !data.task_id) {
+        setIsWarping(false);
+        toast.error(data.detail || data.message || 'Perspective crop request failed');
+        return;
+      }
+
+      let attempts = 0;
+      const interval = setInterval(async () => {
+        attempts++;
+        if (attempts > 30) {
+          clearInterval(interval);
+          setIsWarping(false);
+          toast.error('Perspective crop timed out.');
+          return;
+        }
+        try {
           const sRes = await fetch('/mediapro/api/image/batch/status', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -227,14 +252,16 @@ export default function ImageToolsMatrix({
             clearInterval(interval);
             setIsWarping(false);
             if (onPerspectiveSuccess) onPerspectiveSuccess(t.result);
-            toast.success('Perspective dewarp & enhancement completed!');
+            toast.success('Document flattened & deskewed successfully!');
           } else if (t?.state === 'FAILURE') {
             clearInterval(interval);
             setIsWarping(false);
-            toast.error(`Perspective crop failed: ${t.error}`);
+            toast.error(`Perspective crop failed: ${t.error || 'Server error'}`);
           }
-        }, 800);
-      }
+        } catch (pollErr) {
+          console.warn('Status polling error:', pollErr);
+        }
+      }, 500);
     } catch (err) {
       setIsWarping(false);
       toast.error(`Perspective transform error: ${err.message}`);
@@ -513,15 +540,37 @@ export default function ImageToolsMatrix({
 
             {/* Action Button */}
             <div className="mt-auto pt-4">
-              <button
-                type="button"
-                onClick={handlePerspectiveCrop}
-                disabled={isWarping}
-                className="w-full py-3 rounded-xl bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-400 hover:to-orange-500 text-zinc-950 font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 shadow-lg shadow-amber-500/20 transition"
-              >
-                <Scan className="w-4 h-4" />
-                <span>{isWarping ? 'Warping & Flattening Document...' : '⚡ Flatten & Deskew Document'}</span>
-              </button>
+              <input
+                type="file"
+                ref={matrixFileInputRef}
+                onChange={(e) => {
+                  if (e.target.files?.[0] && onUploadImage) {
+                    onUploadImage(e.target.files[0]);
+                  }
+                }}
+                accept="image/*,.heic,.webp,.bmp"
+                className="hidden"
+              />
+              {!activeImage ? (
+                <button
+                  type="button"
+                  onClick={() => matrixFileInputRef.current?.click()}
+                  className="w-full py-3 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-zinc-950 font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 shadow-lg shadow-cyan-500/20 transition active:scale-98"
+                >
+                  <Upload className="w-4 h-4" />
+                  <span>Upload Image to Dewarp</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handlePerspectiveCrop}
+                  disabled={isWarping}
+                  className="w-full py-3 rounded-xl bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-400 hover:to-orange-500 text-zinc-950 font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 shadow-lg shadow-amber-500/20 transition"
+                >
+                  <Scan className="w-4 h-4" />
+                  <span>{isWarping ? 'Warping & Flattening Document...' : '⚡ Flatten & Deskew Document'}</span>
+                </button>
+              )}
             </div>
           </div>
         )}

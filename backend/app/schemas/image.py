@@ -92,8 +92,20 @@ class ImageBatchProcessRequest(BaseModel):
 
 
 class PerspectiveCropRequest(BaseModel):
-    src_points: List[List[float]]           # [[x0,y0],[x1,y1],[x2,y2],[x3,y3]]
-    dst_aspect: Optional[str] = "auto"     # "auto", "a4_portrait", "us_letter", "square_1_1"
-    enhance_mode: Optional[str] = "none"   # "none", "magic_color", "crisp_bw", "grayscale"
+    src_points: Optional[List[List[float]]] = None
+    points: Optional[List[List[float]]] = None
+    dst_aspect: Optional[str] = "auto"
+    aspect_ratio: Optional[str] = "auto"
+    enhance_mode: Optional[str] = "none"
+    enhancement: Optional[str] = "none"
     output_format: Optional[str] = "JPEG"
-    quality: Optional[int] = 90
+    quality: Optional[int] = 95
+
+    def get_points(self) -> List[List[float]]:
+        return self.points or self.src_points or []
+
+    def get_aspect(self) -> str:
+        return self.aspect_ratio or self.dst_aspect or "auto"
+
+    def get_enhancement(self) -> str:
+        return self.enhancement or self.enhance_mode or "none" 

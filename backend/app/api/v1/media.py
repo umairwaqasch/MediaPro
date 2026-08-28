@@ -34,18 +34,24 @@ def find_upload(video_id: str):
 
 
 # ---------- Upload ----------
+@router.post("/media/upload")
 @router.post("/videos/upload")
 @router.post("/library/upload")
 @router.post("/upload")
 async def upload_video(file: UploadFile = File(...)):
-    """Upload a video file, probe metadata, and trigger thumbnail generation."""
+    """Upload a video file with high-performance 4MB chunked streaming, probe metadata, and trigger thumbnail generation."""
     if not file.filename:
         raise HTTPException(status_code=400, detail="No file provided")
     video_id = generate_video_id()
     dest_path = get_upload_path(video_id, file.filename)
     try:
+        CHUNK_SIZE = 4 * 1024 * 1024  # 4MB async streaming buffer for high disk I/O throughput
         with open(dest_path, "wb") as buf:
-            shutil.copyfileobj(file.file, buf)
+            while True:
+                chunk = await file.read(CHUNK_SIZE)
+                if not chunk:
+                    break
+                buf.write(chunk)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to save file: {e}")
     try:
@@ -58,11 +64,12 @@ async def upload_video(file: UploadFile = File(...)):
         generate_thumbnails_task.delay(dest_path, video_id, 24)
     except Exception:
         pass
-    return {"video_id": video_id, "filename": file.filename, "saved_path": dest_path, "metadata": metadata}
+    return {"video_id": video_id, "id": video_id, "filename": file.filename, "saved_path": dest_path, "metadata": metadata}
 
 
 # ---------- Library ----------
 @router.get("/library/all")
+@router.get("/media/library/all")
 async def get_all_library_items():
     """Get all items (outputs and uploaded sources) in the studio library."""
     outputs = list_outputs()
@@ -95,6 +102,7 @@ async def get_video_thumbnails(video_id: str):
 
 # ---------- Outputs ----------
 @router.get("/outputs")
+@router.get("/media/outputs")
 async def get_all_outputs():
     items = list_outputs()
     for item in items:

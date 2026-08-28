@@ -5,7 +5,9 @@ from pydantic import BaseModel
 
 class BatchProcessRequest(BaseModel):
     video_ids: List[str]
-    operation: str  # "rescale", "crop", "compress", "normalize", "colorgrade", "burn_in", "audio", "gif", "stabilize"
+    operation: Optional[str] = "rescale"
+    preset: Optional[str] = "720p_web"
+    format: Optional[str] = "mp4"
     params: Optional[Dict[str, Any]] = {}
 
 

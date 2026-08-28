@@ -50,13 +50,13 @@ def probe_image(image_path: str) -> Dict[str, Any]:
 
 def generate_image_thumbnail(input_path: str, output_path: str, size: Tuple[int, int] = (400, 300)) -> str:
     """
-    Generate an optimized thumbnail preview preserving aspect ratio.
+    Generate an optimized fast thumbnail preview preserving aspect ratio.
     """
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     with Image.open(input_path) as img:
         img_rgb = img.convert("RGB")
-        img_rgb.thumbnail(size, Image.Resampling.LANCZOS)
-        img_rgb.save(output_path, "JPEG", quality=85, optimize=True)
+        img_rgb.thumbnail(size, Image.Resampling.BILINEAR)
+        img_rgb.save(output_path, "JPEG", quality=80)
     return output_path
 
 

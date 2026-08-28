@@ -18,6 +18,7 @@ export default function ImageLibrary({
   onAddToBatch,
   onDeleteImage,
   onUploadImage,
+  onClearLibrary,
 }) {
   const [filter, setFilter] = useState('all'); // 'all' | 'upload' | 'output'
   const [search, setSearch] = useState('');
@@ -31,10 +32,13 @@ export default function ImageLibrary({
     return true;
   });
 
-  const handleFileChange = (e) => {
+  const handleFileChange = async (e) => {
     const files = Array.from(e.target.files || []);
-    if (files.length > 0) {
-      files.forEach((f) => onUploadImage(f));
+    if (files.length > 0 && onUploadImage) {
+      for (const f of files) {
+        await onUploadImage(f);
+      }
+      if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
@@ -67,9 +71,20 @@ export default function ImageLibrary({
               accept="image/*"
               className="hidden"
             />
+            {images.length > 0 && onClearLibrary && (
+              <button
+                onClick={onClearLibrary}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400 font-bold text-xs border border-rose-500/20 transition-colors shadow-sm active:scale-95"
+                title="Wipe all images from library"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Clear All</span>
+              </button>
+            )}
+
             <button
               onClick={() => fileInputRef.current?.click()}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-cyan-500 text-zinc-950 font-bold text-xs hover:bg-cyan-400 transition-colors shadow-sm"
+              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-cyan-500 text-zinc-950 font-bold text-xs hover:bg-cyan-400 transition-colors shadow-sm active:scale-95"
             >
               <UploadCloud className="w-4 h-4" />
               Upload Images
@@ -183,9 +198,12 @@ export default function ImageLibrary({
                           <Plus className="w-3.5 h-3.5" />
                         </button>
                         <button
-                          onClick={() => onDeleteImage(imgId, img.type)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onDeleteImage(img);
+                          }}
                           className="p-1 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400 transition"
-                          title="Delete"
+                          title="Delete Image"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>

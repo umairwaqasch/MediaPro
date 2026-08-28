@@ -108,7 +108,7 @@ async def batch_process_jobs(payload: BatchProcessRequest):
         raise HTTPException(status_code=400, detail="No video IDs provided")
     batch_id = str(uuid.uuid4())[:8]
     tasks = []
-    operation = payload.operation.lower()
+    operation = (payload.operation or 'rescale').lower()
     params = payload.params or {}
 
     for vid in payload.video_ids:
@@ -225,7 +225,8 @@ async def get_batch_status(payload: BatchStatusRequest):
         except Exception as e:
             statuses.append({"task_id": tid, "state": "FAILURE", "error": str(e), "percent": 0.0})
     total_count = len(payload.task_ids)
-    return {"total_tasks": total_count, "completed_count": completed_count, "failed_count": failed_count, "overall_percent": round(total_percent / max(1, total_count), 1), "is_all_finished": (completed_count + failed_count) >= total_count, "tasks": statuses}
+    all_finished = (completed_count + failed_count) >= total_count
+    return {"total_tasks": total_count, "total": total_count, "completed_count": completed_count, "completed": completed_count, "failed_count": failed_count, "failed": failed_count, "overall_percent": round(total_percent / max(1, total_count), 1), "is_all_finished": all_finished, "all_done": all_finished, "tasks": statuses}
 
 
 @router.post("/tasks/{task_id}/cancel")
@@ -244,22 +245,24 @@ async def clear_completed_tasks():
 
 @router.get("/tasks/{task_id}/status")
 async def get_task_status(task_id: str):
-    """Get status of a running background task."""
+    """Get status of a running background task with unified status and state."""
     try:
         result = AsyncResult(task_id, app=celery)
         state = result.state
-        response = {"task_id": task_id, "state": state}
+        response = {"task_id": task_id, "state": state, "status": state}
         if state == "PROGRESS":
             response.update(result.info or {})
         elif state == "SUCCESS":
             response["result"] = result.result
             response["percent"] = 100.0
+            response["status"] = "SUCCESS"
         elif state == "FAILURE":
             response["error"] = str(result.info) if result.info else "Task failed"
             response["percent"] = 0.0
+            response["status"] = "FAILURE"
         return response
     except Exception as e:
-        return {"task_id": task_id, "state": "FAILURE", "error": str(e), "percent": 0.0}
+        return {"task_id": task_id, "state": "FAILURE", "status": "FAILURE", "error": str(e), "percent": 0.0}
 
 
 @router.get("/tasks/{task_id}/events")

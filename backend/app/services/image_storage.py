@@ -23,9 +23,12 @@ def get_image_upload_path(image_id: str, filename: str) -> str:
 
 def get_image_output_path(image_id: str, suffix: str = "", ext: str = ".jpg") -> str:
     """Get storage path for a processed output image."""
-    if not ext.startswith("."):
-        ext = f".{ext}"
-    name = f"{image_id}_img{suffix}{ext}"
+    ext_str = ext if ext else ".jpg"
+    if not ext_str.startswith("."):
+        ext_str = f".{ext_str}"
+    clean_id = Path(image_id).stem
+    suffix_clean = (f"_{suffix}" if not suffix.startswith("_") else suffix) if suffix else ""
+    name = f"{clean_id}{suffix_clean}{ext_str}"
     return os.path.join(IMAGE_OUTPUT_DIR, name)
 
 
@@ -133,9 +136,11 @@ def list_all_images() -> List[Dict[str, Any]]:
 
 
 def delete_image_upload(image_id: str) -> bool:
-    """Delete uploaded source image and associated thumbnail from disk."""
+    """Delete uploaded source image, all derived output renders, and associated thumbnails from disk."""
     deleted = False
     clean_id = Path(image_id).stem.replace("_thumb", "")
+    
+    # 1. Clean source uploads
     if os.path.exists(IMAGE_UPLOAD_DIR):
         for f in os.listdir(IMAGE_UPLOAD_DIR):
             if not f.startswith('.') and (f.startswith(clean_id) or clean_id in f or f == image_id):
@@ -146,7 +151,16 @@ def delete_image_upload(image_id: str) -> bool:
                 except OSError:
                     pass
 
-    # Clean thumbnail
+    # 2. Cascade delete all derived outputs matching this image ID
+    if os.path.exists(IMAGE_OUTPUT_DIR):
+        for f in os.listdir(IMAGE_OUTPUT_DIR):
+            if not f.startswith('.') and (f.startswith(clean_id) or clean_id in f):
+                try:
+                    os.remove(os.path.join(IMAGE_OUTPUT_DIR, f))
+                except OSError:
+                    pass
+
+    # 3. Clean all associated thumbnails
     if os.path.exists(IMAGE_THUMBNAIL_DIR):
         for t in os.listdir(IMAGE_THUMBNAIL_DIR):
             if not t.startswith('.') and (t.startswith(clean_id) or clean_id in t):
@@ -156,6 +170,21 @@ def delete_image_upload(image_id: str) -> bool:
                     pass
 
     return deleted
+
+
+def clear_all_image_library() -> dict:
+    """Delete ALL uploaded images, outputs, and thumbnails from disk."""
+    counts = {"uploads": 0, "outputs": 0, "thumbnails": 0}
+    for d_path, key in [(IMAGE_UPLOAD_DIR, "uploads"), (IMAGE_OUTPUT_DIR, "outputs"), (IMAGE_THUMBNAIL_DIR, "thumbnails")]:
+        if os.path.exists(d_path):
+            for f in os.listdir(d_path):
+                if not f.startswith('.'):
+                    try:
+                        os.remove(os.path.join(d_path, f))
+                        counts[key] += 1
+                    except OSError:
+                        pass
+    return counts
 
 
 def delete_image_output(filename: str) -> bool:

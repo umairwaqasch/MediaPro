@@ -1,7 +1,9 @@
+from app.schemas.audio import AudioMasterRequest, AudioWaveformResponse
+from app.services.audio_service import AudioService
 """Video processing domain router — all /videos/* endpoints."""
 import os
 from pathlib import Path
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Body
 from fastapi.responses import FileResponse
 
 from app.config import OUTPUT_DIR, THUMBNAIL_DIR, API_PREFIX
@@ -16,11 +18,19 @@ from app.services.ffmpeg_service import (
     probe_video, capture_snapshot, detect_silence_intervals,
     detect_scene_changes, generate_audio_waveform, measure_audio_loudness,
 )
+from app.schemas.face import FaceExtractionRequest
+from app.tasks.face_tasks import extract_unique_faces_task
+from celery.result import AsyncResult
+from app.celery_app import celery
+import io
+import zipfile
+from fastapi.responses import StreamingResponse
 from app.tasks.video_tasks import (
     cut_video_task, create_gif_task, extract_audio_task, concat_segments_task,
     crop_video_task, burn_in_task, silence_jump_cut_task, compress_video_task,
     split_scenes_task, stabilize_video_task, normalize_audio_task,
     boomerang_loop_task, split_screen_task, color_grade_task, rescale_video_task,
+    master_audio_task,
 )
 from app.api.v1.media import find_upload
 
@@ -75,7 +85,8 @@ async def create_gif_job(video_id: str, payload: GifRequest):
     matched, _ = find_upload(video_id)
     if not matched or not os.path.exists(matched):
         raise HTTPException(status_code=404, detail="Source video not found")
-    suffix = _clean_suffix(payload.custom_name) or f"_gif_{int(payload.start_time)}s_to_{int(payload.end_time)}s"
+    et_str = f"{int(payload.end_time)}s" if payload.end_time is not None else "end"
+    suffix = _clean_suffix(payload.custom_name) or f"_gif_{int(payload.start_time or 0)}s_to_{et_str}"
     output_filename = f"{video_id}{suffix}.gif"
     output_path = os.path.join(OUTPUT_DIR, output_filename)
     task = create_gif_task.delay(input_path=matched, output_path=output_path, start_time=payload.start_time, end_time=payload.end_time, fps=payload.fps, width=payload.width, output_filename=output_filename)
@@ -87,10 +98,13 @@ async def create_audio_job(video_id: str, payload: AudioRequest):
     matched, _ = find_upload(video_id)
     if not matched or not os.path.exists(matched):
         raise HTTPException(status_code=404, detail="Source video not found")
-    suffix = _clean_suffix(payload.custom_name) or f"_audio_{int(payload.start_time)}s_to_{int(payload.end_time)}s"
-    output_filename = f"{video_id}{suffix}.{payload.audio_format}"
+    fmt = payload.get_format() if hasattr(payload, 'get_format') else (payload.format or payload.audio_format or "mp3")
+    st = float(payload.start_time or 0.0)
+    et = float(payload.end_time) if payload.end_time is not None else None
+    suffix = _clean_suffix(payload.custom_name) or f"_audio_{int(st)}s_to_{int(et if et else 0)}s"
+    output_filename = f"{video_id}{suffix}.{fmt}"
     output_path = os.path.join(OUTPUT_DIR, output_filename)
-    task = extract_audio_task.delay(input_path=matched, output_path=output_path, start_time=payload.start_time, end_time=payload.end_time, audio_format=payload.audio_format, bitrate=payload.bitrate, output_filename=output_filename)
+    task = extract_audio_task.delay(input_path=matched, output_path=output_path, start_time=st, end_time=et, audio_format=fmt, bitrate=payload.bitrate or "192k", output_filename=output_filename)
     return {"task_id": task.id, "video_id": video_id, "output_filename": output_filename, "type": "audio"}
 
 
@@ -130,10 +144,11 @@ async def burn_in_overlay_job(video_id: str, payload: BurnInRequest):
     matched, _ = find_upload(video_id)
     if not matched or not os.path.exists(matched):
         raise HTTPException(status_code=404, detail="Source video not found")
-    if payload.end_time <= payload.start_time:
+    if payload.end_time is not None and payload.start_time is not None and payload.end_time <= payload.start_time:
         raise HTTPException(status_code=400, detail="End time must be greater than start time")
     mode_tag = "tc" if payload.timecode_mode and payload.timecode_mode != "none" else "overlay"
-    suffix = _clean_suffix(payload.custom_name) or f"_{mode_tag}_{int(payload.start_time)}s_to_{int(payload.end_time)}s"
+    et_str = f"{int(payload.end_time)}s" if payload.end_time is not None else "end"
+    suffix = _clean_suffix(payload.custom_name) or f"_{mode_tag}_{int(payload.start_time or 0)}s_to_{et_str}"
     output_filename = f"{video_id}{suffix}.mp4"
     output_path = os.path.join(OUTPUT_DIR, output_filename)
     task = burn_in_task.delay(input_path=matched, output_path=output_path, start_time=payload.start_time, end_time=payload.end_time, text=payload.text or "", timecode_mode=payload.timecode_mode or "none", position=payload.position or "bottom-right", font_size=payload.font_size or 28, font_color=payload.font_color or "white", bg_box=True if payload.bg_box is None else payload.bg_box, bg_opacity=0.6 if payload.bg_opacity is None else payload.bg_opacity, output_filename=output_filename)
@@ -295,11 +310,13 @@ async def color_grade_video_job(video_id: str, payload: ColorGradeRequest):
     matched, _ = find_upload(video_id)
     if not matched or not os.path.exists(matched):
         raise HTTPException(status_code=404, detail="Source video not found")
-    preset = payload.preset or "none"
+    preset = payload.get_preset() if hasattr(payload, 'get_preset') else (payload.lut or payload.preset or "none")
     suffix = _clean_suffix(payload.custom_name) or f"_graded_{preset}"
     output_filename = f"{video_id}{suffix}.mp4"
     output_path = os.path.join(OUTPUT_DIR, output_filename)
-    task = color_grade_task.delay(input_path=matched, output_path=output_path, start_time=payload.start_time, end_time=payload.end_time, preset=preset, brightness=float(payload.brightness or 0.0), contrast=float(payload.contrast or 1.0), saturation=float(payload.saturation or 1.0), temperature=float(payload.temperature or 0.0), vignette=float(payload.vignette or 0.0), sharpness=float(payload.sharpness or 0.0), output_filename=output_filename)
+    st = float(payload.start_time or 0.0)
+    et = float(payload.end_time) if payload.end_time is not None else None
+    task = color_grade_task.delay(input_path=matched, output_path=output_path, start_time=st, end_time=et, preset=preset, brightness=float(payload.brightness or 0.0), contrast=float(payload.contrast or 1.0), saturation=float(payload.saturation or 1.0), temperature=float(payload.temperature or 0.0), vignette=float(payload.vignette or 0.0), sharpness=float(payload.sharpness or 0.0), output_filename=output_filename)
     return {"task_id": task.id, "video_id": video_id, "output_filename": output_filename, "preset": preset, "type": "color_grade"}
 
 
@@ -315,3 +332,188 @@ async def rescale_video_job(video_id: str, payload: RescaleRequest):
     output_path = os.path.join(OUTPUT_DIR, output_filename)
     task = rescale_video_task.delay(input_path=matched, output_path=output_path, target_width=tw, target_height=th, start_time=float(payload.start_time or 0.0), end_time=payload.end_time, algorithm=payload.algorithm or "lanczos", framing_mode=payload.framing_mode or "fit_pad", sharpen_strength=float(payload.sharpen_strength or 0.0), codec=payload.codec or "auto", quality_preset=payload.quality_preset or "high", output_filename=output_filename)
     return {"task_id": task.id, "video_id": video_id, "output_filename": output_filename, "target_width": tw, "target_height": th, "type": "rescale_video"}
+
+
+@router.get("/videos/{video_id}/audio/waveform", response_model=AudioWaveformResponse)
+async def get_audio_waveform_data(video_id: str, points: int = Query(400, ge=50, le=1200)):
+    """Extract fast normalized peak points for interactive UI audio waveform rendering."""
+    src, _ = find_upload(video_id)
+    if not src:
+        raise HTTPException(status_code=404, detail="Video not found")
+    try:
+        data = AudioService.extract_waveform_peaks(src, num_points=points)
+        return {
+            "video_id": video_id,
+            "sample_rate": data.get("sample_rate", 48000),
+            "duration": data.get("duration", 0.0),
+            "channels": data.get("channels", 2),
+            "peaks": data.get("peaks", []),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to extract waveform: {e}")
+
+
+@router.post("/videos/{video_id}/audio/master")
+async def master_audio(video_id: str, req: AudioMasterRequest):
+    """Apply 4-band EQ, vocal clarity, de-esser, and broadcast loudness normalization."""
+    src, _ = find_upload(video_id)
+    if not src:
+        raise HTTPException(status_code=404, detail="Video not found")
+
+    ext = f".{req.audio_format.lower()}" if req.as_audio_only else Path(src).suffix
+    out_filename = f"{video_id}_audio_master{ext}"
+    out_path = os.path.join(OUTPUT_DIR, out_filename)
+
+    filter_graph = AudioService.build_mastering_filters(req.model_dump())
+
+    task = master_audio_task.delay(
+        input_path=src,
+        output_path=out_path,
+        audio_filters=filter_graph,
+        as_audio_only=req.as_audio_only,
+        audio_format=req.audio_format,
+        output_filename=out_filename,
+    )
+    return {"task_id": task.id, "status": "QUEUED", "output_filename": out_filename}
+
+
+# ---------- Video Probing & Transform Aliases ----------
+@router.get("/videos/{video_id}/probe")
+async def probe_video_endpoint(video_id: str):
+    matched, _ = find_upload(video_id)
+    if not matched or not os.path.exists(matched):
+        raise HTTPException(status_code=404, detail="Video not found")
+    from app.services.ffmpeg_service import probe_video
+    return probe_video(matched)
+
+
+@router.post("/videos/{video_id}/transform")
+async def transform_video_endpoint(video_id: str, payload: dict = Body(...)):
+    matched, ext = find_upload(video_id)
+    if not matched or not os.path.exists(matched):
+        raise HTTPException(status_code=404, detail="Video not found")
+    speed = float(payload.get("speed", 1.0))
+    output_filename = f"{video_id}_transformed_{speed}x{ext}"
+    output_path = os.path.join(OUTPUT_DIR, output_filename)
+    task = cut_video_task.delay(
+        input_path=matched,
+        output_path=output_path,
+        start_time=0.0,
+        end_time=None,
+        mode="accurate",
+        speed=speed,
+        output_filename=output_filename,
+    )
+    return {"task_id": task.id, "video_id": video_id, "output_filename": output_filename, "status": "QUEUED"}
+
+
+@router.post("/audio/master")
+async def master_audio_top_level(payload: dict = Body(...)):
+    vid_id = payload.get("video_id")
+    if not vid_id:
+        raise HTTPException(status_code=400, detail="video_id required")
+    matched, _ = find_upload(vid_id)
+    if not matched or not os.path.exists(matched):
+        raise HTTPException(status_code=404, detail="Video not found")
+    output_filename = f"{vid_id}_mastered.mp4"
+    output_path = os.path.join(OUTPUT_DIR, output_filename)
+    filter_graph = AudioService.build_mastering_filters(payload)
+    task = master_audio_task.delay(
+        input_path=matched,
+        output_path=output_path,
+        audio_filters=filter_graph,
+        as_audio_only=payload.get("as_audio_only", False),
+        audio_format=payload.get("audio_format", "mp3"),
+        output_filename=output_filename,
+    )
+    return {"task_id": task.id, "video_id": vid_id, "output_filename": output_filename, "status": "QUEUED"}
+
+
+# ---------- Plan 08: AI Unique Face Extractor & Best-Shot Gallery ----------
+@router.post("/videos/{video_id}/faces/extract")
+async def extract_faces_from_video(video_id: str, payload: FaceExtractionRequest = FaceExtractionRequest()):
+    """Start background AI face detection, neural clustering and best-shot extraction."""
+    matched, _ = find_upload(video_id)
+    if not matched or not os.path.exists(matched):
+        raise HTTPException(status_code=404, detail="Source video not found")
+
+    task = extract_unique_faces_task.delay(
+        video_id=video_id,
+        video_path=matched,
+        sample_rate_fps=float(payload.sample_rate_fps or 1.5),
+        similarity_threshold=float(payload.similarity_threshold or 0.65),
+        min_face_size=int(payload.min_face_size or 40),
+        max_frames=int(payload.max_frames or 300),
+    )
+    return {
+        "task_id": task.id,
+        "video_id": video_id,
+        "status": "QUEUED",
+        "message": "AI face extraction task queued"
+    }
+
+
+@router.get("/videos/{video_id}/faces/{task_id}")
+async def get_face_extraction_status(video_id: str, task_id: str):
+    """Query the progress or complete results of a face extraction job."""
+    res = AsyncResult(task_id, app=celery)
+    state = res.state
+    if state == "SUCCESS":
+        return res.result
+    elif state == "PROGRESS":
+        meta = res.info if isinstance(res.info, dict) else {}
+        return {
+            "task_id": task_id,
+            "video_id": video_id,
+            "status": "PROGRESS",
+            "percent": meta.get("percent", 10.0),
+            "message": meta.get("message", "Processing video frames..."),
+        }
+    elif state == "FAILURE":
+        return {
+            "task_id": task_id,
+            "video_id": video_id,
+            "status": "FAILURE",
+            "error": str(res.result),
+        }
+    return {
+        "task_id": task_id,
+        "video_id": video_id,
+        "status": "PENDING",
+        "percent": 0.0,
+        "message": "Task queued in worker...",
+    }
+
+
+@router.get("/videos/{video_id}/faces/{task_id}/download-zip")
+async def download_faces_zip(video_id: str, task_id: str):
+    """Download all unique headshot photographs packaged into a ZIP archive."""
+    res = AsyncResult(task_id, app=celery)
+    if res.state != "SUCCESS" or not isinstance(res.result, dict):
+        raise HTTPException(status_code=400, detail="Face extraction task is not completed yet")
+
+    people = res.result.get("people", [])
+    if not people:
+        raise HTTPException(status_code=404, detail="No faces were detected in this video")
+
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+        for p in people:
+            h_filename = p.get("headshot_filename")
+            if h_filename:
+                h_path = os.path.join(OUTPUT_DIR, h_filename)
+                if os.path.isfile(h_path):
+                    zip_file.write(h_path, arcname=f"headshots/{h_filename}")
+
+            f_filename = p.get("fullframe_filename")
+            if f_filename:
+                f_path = os.path.join(OUTPUT_DIR, f_filename)
+                if os.path.isfile(f_path):
+                    zip_file.write(f_path, arcname=f"full_frames/{f_filename}")
+
+    zip_buffer.seek(0)
+    return StreamingResponse(
+        zip_buffer,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{video_id}_unique_faces.zip"'}
+    )

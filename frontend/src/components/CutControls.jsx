@@ -46,6 +46,7 @@ export default function CutControls({
   onColorGradeSubmit,
   onRescaleSubmit,
   onNormalizeAudioSubmit,
+  onOpenAudioMaster,
   onBoomerangSubmit,
   onSplitScreenSubmit,
   onLoadSegmentsToQueue,
@@ -2068,6 +2069,21 @@ export default function CutControls({
             >
               <Volume2 className="w-3 h-3" />
               <span>EBU R128 Master</span>
+            </button>
+          </div>
+
+          {/* Launch Advanced Mastering Studio Modal */}
+          <div className="p-3 rounded-xl bg-gradient-to-r from-indigo-500/10 via-purple-500/10 to-brand-500/10 border border-indigo-500/20 flex items-center justify-between gap-2">
+            <div>
+              <span className="text-xs font-bold text-indigo-400 block">Pro Mastering Suite</span>
+              <span className="text-[10px] text-zinc-400 block">4-Band Parametric EQ, Vocal Clarity & Waveform</span>
+            </div>
+            <button
+              type="button"
+              onClick={onOpenAudioMaster}
+              className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow-sm transition whitespace-nowrap"
+            >
+              Open Studio
             </button>
           </div>
 

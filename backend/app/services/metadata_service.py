@@ -115,12 +115,16 @@ def extract_dominant_color_palette(image_path: str, num_colors: int = 6) -> List
     # Count frequencies
     counts = np.bincount(np.array(palette_img).flatten(), minlength=num_colors)
 
-    for i in range(num_colors):
-        r = pal_data[i * 3]
-        g = pal_data[i * 3 + 1]
-        b = pal_data[i * 3 + 2]
+    raw_pal = palette_img.getpalette() or []
+    actual_colors = len(raw_pal) // 3
+    limit = min(num_colors, actual_colors)
+
+    for i in range(limit):
+        r = raw_pal[i * 3]
+        g = raw_pal[i * 3 + 1]
+        b = raw_pal[i * 3 + 2]
         hex_code = f"#{r:02x}{g:02x}{b:02x}".upper()
-        pct = round((counts[i] / total_pixels) * 100, 1)
+        pct = round((counts[i] / total_pixels) * 100, 1) if i < len(counts) else 0.0
         colors.append({
             "hex": hex_code,
             "rgb": [int(r), int(g), int(b)],
@@ -153,4 +157,8 @@ def calculate_image_histogram(image_path: str) -> Dict[str, List[int]]:
         "green": hist_g,
         "blue": hist_b,
         "luminance": hist_lum,
+        "r": hist_r,
+        "g": hist_g,
+        "b": hist_b,
+        "l": hist_lum,
     }
