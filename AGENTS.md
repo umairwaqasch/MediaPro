@@ -1,4 +1,4 @@
-﻿# Project Guidelines: Media Pro
+# Project Guidelines: Media Pro
 
 > **App Name**: Media Pro Studio
 > **URL**: `http://localhost:8090/mediapro`
@@ -68,7 +68,6 @@ backend/app/
 +-- celery_app.py
 +-- config.py
 +-- main.py               <- 53-line clean entry point (DO NOT ADD ROUTES HERE)
-+-- main_monolith_backup.py  <- Original 2113-line monolith (reference only)
 ```
 
 ## 7. Key Data Paths (Inside Containers)
@@ -82,4 +81,4 @@ backend/app/
 | `/data/image_outputs/` | Processed image exports |
 | `/data/image_thumbnails/` | Image thumbnail previews |
 
-> Host bind-mount: `c:/Users/umairwaqas/Projects/VideoProcessor/data/`
+> Host bind-mount: `c:/Users/umairwaqas/Projects/MediaPro/data/`

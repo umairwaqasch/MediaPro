@@ -1,4 +1,4 @@
-﻿import React, { useRef, useEffect, useState, useCallback } from 'react';
+import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { ZoomIn, ZoomOut, RefreshCw, Volume2 } from 'lucide-react';
 
 export default function AudioWaveformCanvas({

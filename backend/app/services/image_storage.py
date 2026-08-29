@@ -1,4 +1,4 @@
-"""Image storage management service for VideoProcessor Image Studio."""
+"""Image storage management service for MediaPro Image Studio."""
 import os
 import uuid
 from pathlib import Path
@@ -9,6 +9,8 @@ from app.config import (
     IMAGE_THUMBNAIL_DIR,
 )
 
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".tiff", ".tif", ".heic"}
+
 
 def generate_image_id() -> str:
     """Generate a unique image identifier."""
@@ -17,7 +19,9 @@ def generate_image_id() -> str:
 
 def get_image_upload_path(image_id: str, filename: str) -> str:
     """Get storage path for an uploaded source image."""
-    ext = Path(filename).suffix.lower() or ".jpg"
+    ext = Path(filename).suffix.lower()
+    if ext not in IMAGE_EXTENSIONS:
+        ext = ".jpg"
     return os.path.join(IMAGE_UPLOAD_DIR, f"{image_id}{ext}")
 
 
@@ -55,17 +59,20 @@ def find_image_file(identifier: str) -> Optional[str]:
     if os.path.isfile(exact_out):
         return exact_out
 
-    # 3. Check image_id prefix in uploads
+    # 3. Stem matching in uploads
+    clean = Path(identifier).stem
     if os.path.exists(IMAGE_UPLOAD_DIR):
         for f in os.listdir(IMAGE_UPLOAD_DIR):
-            if f.startswith(identifier) and not f.startswith('.'):
-                return os.path.join(IMAGE_UPLOAD_DIR, f)
+            if not f.startswith('.'):
+                if f.startswith(clean) or clean == Path(f).stem or f == identifier:
+                    return os.path.join(IMAGE_UPLOAD_DIR, f)
 
-    # 4. Check filename match in outputs
+    # 4. Stem matching in outputs
     if os.path.exists(IMAGE_OUTPUT_DIR):
         for f in os.listdir(IMAGE_OUTPUT_DIR):
-            if f.startswith(identifier) and not f.startswith('.'):
-                return os.path.join(IMAGE_OUTPUT_DIR, f)
+            if not f.startswith('.'):
+                if f.startswith(clean) or clean == Path(f).stem or f == identifier:
+                    return os.path.join(IMAGE_OUTPUT_DIR, f)
 
     return None
 
@@ -79,22 +86,28 @@ def list_image_uploads() -> List[Dict[str, Any]]:
     for f in sorted(os.listdir(IMAGE_UPLOAD_DIR)):
         if f.startswith('.'):
             continue
+        ext = Path(f).suffix.lower()
+        if ext not in IMAGE_EXTENSIONS:
+            continue
         fpath = os.path.join(IMAGE_UPLOAD_DIR, f)
         if os.path.isfile(fpath):
-            stat = os.stat(fpath)
-            img_id = f.split(".")[0]
-            thumb = f"{img_id}_thumb.jpg"
-            has_thumb = os.path.isfile(os.path.join(IMAGE_THUMBNAIL_DIR, thumb))
-            uploads.append({
-                "id": img_id,
-                "image_id": img_id,
-                "filename": f,
-                "type": "upload",
-                "size_bytes": stat.st_size,
-                "created_at": stat.st_mtime,
-                "thumbnail": f"/mediapro/api/image/thumbnail/{thumb}" if has_thumb else None,
-                "url": f"/mediapro/api/image/uploads/{f}",
-            })
+            try:
+                stat = os.stat(fpath)
+                stem = Path(f).stem
+                thumb = f"{stem}_thumb.jpg"
+                has_thumb = os.path.isfile(os.path.join(IMAGE_THUMBNAIL_DIR, thumb))
+                uploads.append({
+                    "id": stem,
+                    "image_id": stem,
+                    "filename": f,
+                    "type": "upload",
+                    "size_bytes": stat.st_size,
+                    "created_at": stat.st_mtime,
+                    "thumbnail": f"/mediapro/api/image/thumbnail/{thumb}" if has_thumb else f"/mediapro/api/image/uploads/{f}",
+                    "url": f"/mediapro/api/image/uploads/{f}",
+                })
+            except OSError:
+                pass
     return uploads
 
 
@@ -107,21 +120,27 @@ def list_image_outputs() -> List[Dict[str, Any]]:
     for f in sorted(os.listdir(IMAGE_OUTPUT_DIR)):
         if f.startswith('.'):
             continue
+        ext = Path(f).suffix.lower()
+        if ext not in IMAGE_EXTENSIONS:
+            continue
         fpath = os.path.join(IMAGE_OUTPUT_DIR, f)
         if os.path.isfile(fpath):
-            stat = os.stat(fpath)
-            base = Path(f).stem
-            thumb = f"{base}_thumb.jpg"
-            has_thumb = os.path.isfile(os.path.join(IMAGE_THUMBNAIL_DIR, thumb))
-            outputs.append({
-                "id": f,
-                "filename": f,
-                "type": "output",
-                "size_bytes": stat.st_size,
-                "created_at": stat.st_mtime,
-                "thumbnail": f"/mediapro/api/image/thumbnail/{thumb}" if has_thumb else None,
-                "url": f"/mediapro/api/image/outputs/{f}",
-            })
+            try:
+                stat = os.stat(fpath)
+                stem = Path(f).stem
+                thumb = f"{stem}_thumb.jpg"
+                has_thumb = os.path.isfile(os.path.join(IMAGE_THUMBNAIL_DIR, thumb))
+                outputs.append({
+                    "id": f,
+                    "filename": f,
+                    "type": "output",
+                    "size_bytes": stat.st_size,
+                    "created_at": stat.st_mtime,
+                    "thumbnail": f"/mediapro/api/image/thumbnail/{thumb}" if has_thumb else f"/mediapro/api/image/outputs/{f}",
+                    "url": f"/mediapro/api/image/outputs/{f}",
+                })
+            except OSError:
+                pass
     return outputs
 
 
@@ -139,7 +158,7 @@ def delete_image_upload(image_id: str) -> bool:
     """Delete uploaded source image, all derived output renders, and associated thumbnails from disk."""
     deleted = False
     clean_id = Path(image_id).stem.replace("_thumb", "")
-    
+
     # 1. Clean source uploads
     if os.path.exists(IMAGE_UPLOAD_DIR):
         for f in os.listdir(IMAGE_UPLOAD_DIR):
@@ -163,28 +182,13 @@ def delete_image_upload(image_id: str) -> bool:
     # 3. Clean all associated thumbnails
     if os.path.exists(IMAGE_THUMBNAIL_DIR):
         for t in os.listdir(IMAGE_THUMBNAIL_DIR):
-            if not t.startswith('.') and (t.startswith(clean_id) or clean_id in t):
+            if not t.startswith('.') and (clean_id in t or t.startswith(clean_id)):
                 try:
                     os.remove(os.path.join(IMAGE_THUMBNAIL_DIR, t))
                 except OSError:
                     pass
 
     return deleted
-
-
-def clear_all_image_library() -> dict:
-    """Delete ALL uploaded images, outputs, and thumbnails from disk."""
-    counts = {"uploads": 0, "outputs": 0, "thumbnails": 0}
-    for d_path, key in [(IMAGE_UPLOAD_DIR, "uploads"), (IMAGE_OUTPUT_DIR, "outputs"), (IMAGE_THUMBNAIL_DIR, "thumbnails")]:
-        if os.path.exists(d_path):
-            for f in os.listdir(d_path):
-                if not f.startswith('.'):
-                    try:
-                        os.remove(os.path.join(d_path, f))
-                        counts[key] += 1
-                    except OSError:
-                        pass
-    return counts
 
 
 def delete_image_output(filename: str) -> bool:
@@ -210,3 +214,18 @@ def delete_image_output(filename: str) -> bool:
                     pass
 
     return deleted
+
+
+def clear_all_image_library() -> dict:
+    """Delete ALL uploaded images, outputs, and thumbnails from disk."""
+    counts = {"uploads": 0, "outputs": 0, "thumbnails": 0}
+    for d_path, key in [(IMAGE_UPLOAD_DIR, "uploads"), (IMAGE_OUTPUT_DIR, "outputs"), (IMAGE_THUMBNAIL_DIR, "thumbnails")]:
+        if os.path.exists(d_path):
+            for f in os.listdir(d_path):
+                if not f.startswith('.'):
+                    try:
+                        os.remove(os.path.join(d_path, f))
+                        counts[key] += 1
+                    except OSError:
+                        pass
+    return counts

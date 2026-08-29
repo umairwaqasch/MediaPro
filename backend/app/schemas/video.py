@@ -39,6 +39,12 @@ class SegmentItem(BaseModel):
     label: Optional[str] = None
 
 
+class MultiCutRequest(BaseModel):
+    segments: List[SegmentItem]
+    mode: Optional[str] = "fast"
+    custom_name: Optional[str] = None
+
+
 class ConcatRequest(BaseModel):
     segments: List[SegmentItem]
     custom_name: Optional[str] = None

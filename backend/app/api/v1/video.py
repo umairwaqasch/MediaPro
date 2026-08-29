@@ -3,12 +3,12 @@ from app.services.audio_service import AudioService
 """Video processing domain router — all /videos/* endpoints."""
 import os
 from pathlib import Path
-from fastapi import APIRouter, HTTPException, Query, Body
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, HTTPException, Query, Body, BackgroundTasks
+from fastapi.responses import FileResponse, StreamingResponse
 
 from app.config import OUTPUT_DIR, THUMBNAIL_DIR, API_PREFIX
 from app.schemas.video import (
-    CutRequest, GifRequest, AudioRequest, ConcatRequest, CropRequest,
+    CutRequest, MultiCutRequest, GifRequest, AudioRequest, ConcatRequest, CropRequest,
     BurnInRequest, SilenceDetectRequest, SilenceJumpCutRequest,
     CompressRequest, SceneDetectRequest, SceneSplitRequest,
     StabilizeRequest, NormalizeAudioRequest, BoomerangRequest,
@@ -67,9 +67,11 @@ async def create_cut_job(video_id: str, payload: CutRequest):
     matched, original_ext = find_upload(video_id)
     if not matched or not os.path.exists(matched):
         raise HTTPException(status_code=404, detail="Source video not found")
-    if payload.end_time <= payload.start_time:
+    if payload.end_time is not None and payload.start_time is not None and payload.end_time <= payload.start_time:
         raise HTTPException(status_code=400, detail="End time must be greater than start time")
-    suffix = _clean_suffix(payload.custom_name) or f"_{payload.mode}_{int(payload.start_time)}s_to_{int(payload.end_time)}s"
+    et_str = f"{int(payload.end_time)}s" if payload.end_time is not None else "end"
+    st_str = f"{int(payload.start_time or 0)}s"
+    suffix = _clean_suffix(payload.custom_name) or f"_{payload.mode}_{st_str}_to_{et_str}"
     if payload.speed != 1.0 and not payload.custom_name:
         suffix += f"_{payload.speed}x"
     if payload.audio_mode == "mute" and not payload.custom_name:
@@ -78,6 +80,48 @@ async def create_cut_job(video_id: str, payload: CutRequest):
     output_path = os.path.join(OUTPUT_DIR, output_filename)
     task = cut_video_task.delay(input_path=matched, output_path=output_path, start_time=payload.start_time, end_time=payload.end_time, mode=payload.mode, audio_mode=payload.audio_mode, speed=payload.speed, volume_gain=payload.volume_gain, output_filename=output_filename)
     return {"task_id": task.id, "video_id": video_id, "output_filename": output_filename, "start_time": payload.start_time, "end_time": payload.end_time, "mode": payload.mode}
+
+
+@router.post("/videos/{video_id}/multi-cut")
+async def multi_cut_job(video_id: str, payload: MultiCutRequest):
+    """Cut multiple queued segments into separate video files simultaneously."""
+    matched, original_ext = find_upload(video_id)
+    if not matched or not os.path.exists(matched):
+        raise HTTPException(status_code=404, detail="Source video not found")
+    if not payload.segments:
+        raise HTTPException(status_code=400, detail="No segments provided for multi-cut")
+    
+    tasks = []
+    for idx, seg in enumerate(payload.segments, 1):
+        st = float(seg.start_time or 0.0)
+        et = float(seg.end_time) if seg.end_time is not None else None
+        if et is not None and et <= st:
+            continue
+        seg_label = _clean_suffix(seg.label) or f"_clip{idx:02d}"
+        custom_base = _clean_suffix(payload.custom_name) or ""
+        out_name = f"{video_id}{custom_base}{seg_label}_{int(st)}s_to_{int(et if et else 0)}s{original_ext}"
+        out_path = os.path.join(OUTPUT_DIR, out_name)
+        task = cut_video_task.delay(
+            input_path=matched,
+            output_path=out_path,
+            start_time=st,
+            end_time=et,
+            mode=payload.mode or "fast",
+            output_filename=out_name,
+        )
+        tasks.append({
+            "task_id": task.id,
+            "clip_index": idx,
+            "start_time": st,
+            "end_time": et,
+            "output_filename": out_name,
+        })
+    return {
+        "status": "QUEUED",
+        "video_id": video_id,
+        "total_clips": len(tasks),
+        "tasks": tasks,
+    }
 
 
 @router.post("/videos/{video_id}/gif")
@@ -128,11 +172,13 @@ async def crop_video_job(video_id: str, payload: CropRequest):
     matched, _ = find_upload(video_id)
     if not matched or not os.path.exists(matched):
         raise HTTPException(status_code=404, detail="Source video not found")
-    if payload.end_time <= payload.start_time:
+    if payload.end_time is not None and payload.start_time is not None and payload.end_time <= payload.start_time:
         raise HTTPException(status_code=400, detail="End time must be greater than start time")
     clean_ar = (payload.aspect_ratio or "crop").replace(":", "x")
     mode_tag = "blur" if payload.bg_blur else "crop"
-    suffix = _clean_suffix(payload.custom_name) or f"_{mode_tag}_{clean_ar}_{int(payload.start_time)}s_to_{int(payload.end_time)}s"
+    et_str = f"{int(payload.end_time)}s" if payload.end_time is not None else "end"
+    st_str = f"{int(payload.start_time or 0)}s"
+    suffix = _clean_suffix(payload.custom_name) or f"_{mode_tag}_{clean_ar}_{st_str}_to_{et_str}"
     output_filename = f"{video_id}{suffix}.mp4"
     output_path = os.path.join(OUTPUT_DIR, output_filename)
     task = crop_video_task.delay(input_path=matched, output_path=output_path, start_time=payload.start_time, end_time=payload.end_time, crop_x=payload.crop_x, crop_y=payload.crop_y, crop_width=payload.crop_width, crop_height=payload.crop_height, aspect_ratio=payload.aspect_ratio, bg_blur=payload.bg_blur, output_filename=output_filename)
@@ -486,8 +532,10 @@ async def get_face_extraction_status(video_id: str, task_id: str):
 
 
 @router.get("/videos/{video_id}/faces/{task_id}/download-zip")
-async def download_faces_zip(video_id: str, task_id: str):
+async def download_faces_zip(video_id: str, task_id: str, background_tasks: BackgroundTasks = None):
     """Download all unique headshot photographs packaged into a ZIP archive."""
+    import tempfile
+
     res = AsyncResult(task_id, app=celery)
     if res.state != "SUCCESS" or not isinstance(res.result, dict):
         raise HTTPException(status_code=400, detail="Face extraction task is not completed yet")
@@ -496,8 +544,11 @@ async def download_faces_zip(video_id: str, task_id: str):
     if not people:
         raise HTTPException(status_code=404, detail="No faces were detected in this video")
 
-    zip_buffer = io.BytesIO()
-    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+    temp_zip = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
+    temp_zip_path = temp_zip.name
+    temp_zip.close()
+
+    with zipfile.ZipFile(temp_zip_path, "w", zipfile.ZIP_STORED) as zip_file:
         for p in people:
             h_filename = p.get("headshot_filename")
             if h_filename:
@@ -511,9 +562,13 @@ async def download_faces_zip(video_id: str, task_id: str):
                 if os.path.isfile(f_path):
                     zip_file.write(f_path, arcname=f"full_frames/{f_filename}")
 
-    zip_buffer.seek(0)
-    return StreamingResponse(
-        zip_buffer,
+    zip_name = f"{video_id}_unique_faces.zip"
+    if background_tasks:
+        background_tasks.add_task(os.remove, temp_zip_path)
+
+    return FileResponse(
+        temp_zip_path,
         media_type="application/zip",
-        headers={"Content-Disposition": f'attachment; filename="{video_id}_unique_faces.zip"'}
+        filename=zip_name,
+        headers={"Content-Disposition": f'attachment; filename="{zip_name}"'},
     )

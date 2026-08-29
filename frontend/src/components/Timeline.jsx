@@ -1,5 +1,5 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
-import { Trash2, Play, Layers, MoveHorizontal } from 'lucide-react';
+import { Trash2, Play, Layers, MoveHorizontal, Scissors, Zap } from 'lucide-react';
 import { formatTimecode } from '../utils/formatters';
 
 export default function Timeline({
@@ -14,6 +14,9 @@ export default function Timeline({
   segments = [],
   onSelectSegment,
   onRemoveSegment,
+  onBatchCutSegments,
+  onMergeSegments,
+  onClearSegments,
   videoId,
 }) {
   const timelineRef = useRef(null);
@@ -22,18 +25,23 @@ export default function Timeline({
   const [dragAnchor, setDragAnchor] = useState(null); // { mouseTime, initialStart, initialEnd }
   const [hoverTime, setHoverTime] = useState(null);
 
-  const startPercent = duration > 0 ? (startTime / duration) * 100 : 0;
-  const endPercent = duration > 0 ? (endTime / duration) * 100 : 100;
-  const currentPercent = duration > 0 ? (currentTime / duration) * 100 : 0;
-  const hoverPercent = duration > 0 && hoverTime !== null ? (hoverTime / duration) * 100 : null;
+  const safeDuration = Math.max(0.001, duration || 0);
+  const safeStartTime = Math.max(0, Math.min(startTime || 0, safeDuration));
+  const safeEndTime = Math.max(safeStartTime, Math.min(endTime === 0 ? safeDuration : (endTime || safeDuration), safeDuration));
+  const safeCurrentTime = Math.max(0, Math.min(currentTime || 0, safeDuration));
+
+  const startPercent = Math.max(0, Math.min(100, (safeStartTime / safeDuration) * 100));
+  const endPercent = Math.max(0, Math.min(100, (safeEndTime / safeDuration) * 100));
+  const currentPercent = Math.max(0, Math.min(100, (safeCurrentTime / safeDuration) * 100));
+  const hoverPercent = hoverTime !== null ? Math.max(0, Math.min(100, (hoverTime / safeDuration) * 100)) : null;
 
   const getTimeFromMouseEvent = useCallback((e) => {
-    if (!timelineRef.current || duration <= 0) return 0;
+    if (!timelineRef.current || safeDuration <= 0) return 0;
     const rect = timelineRef.current.getBoundingClientRect();
     const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
-    const ratio = x / rect.width;
-    return ratio * duration;
-  }, [duration]);
+    const ratio = rect.width > 0 ? x / rect.width : 0;
+    return Math.max(0, Math.min(ratio * safeDuration, safeDuration));
+  }, [safeDuration]);
 
   const handleMouseDown = (e, type) => {
     e.stopPropagation();
@@ -169,7 +177,7 @@ export default function Timeline({
           onMouseDown={(e) => handleMouseDown(e, 'playhead')}
           onMouseMove={handleMouseMoveOverTimeline}
           onMouseLeave={() => setHoverTime(null)}
-          className="relative h-16 bg-slate-900 dark:bg-studio-950 rounded-xl cursor-pointer border border-slate-300 dark:border-studio-800 shadow-inner group"
+          className="relative h-16 bg-slate-900 dark:bg-studio-950 rounded-xl cursor-pointer border border-slate-300 dark:border-studio-800 shadow-inner group overflow-x-clip"
         >
           {/* Inner Filmstrip Viewport (contains thumbnails and waveforms) */}
           <div className="absolute inset-0 rounded-xl overflow-hidden pointer-events-none">
@@ -316,10 +324,48 @@ export default function Timeline({
       {/* Multi-Segment Queue Strip */}
       {segments.length > 0 && (
         <div className="pt-1.5 border-t border-slate-200 dark:border-studio-800 space-y-1.5">
-          <div className="flex items-center justify-between text-[11px]">
+          <div className="flex flex-wrap items-center justify-between gap-1.5 text-[11px]">
             <span className="font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-1">
-              <Layers className="w-3 h-3 text-brand-500" /> Multi-Cut Queue ({segments.length} clips)
+              <Layers className="w-3.5 h-3.5 text-brand-500" /> Multi-Cut Queue ({segments.length} clips)
             </span>
+
+            {/* Direct Multi-Cut Action Buttons */}
+            <div className="flex items-center space-x-1.5">
+              {onBatchCutSegments && (
+                <button
+                  type="button"
+                  onClick={() => onBatchCutSegments(segments)}
+                  className="px-2 py-0.5 rounded-lg bg-gradient-to-r from-brand-600 to-brand-500 hover:from-brand-500 hover:to-brand-600 text-white font-bold text-[10px] flex items-center gap-1 shadow-sm transition active:scale-95"
+                  title="Cut and export all queued clips as separate video files simultaneously"
+                >
+                  <Scissors className="w-3 h-3" />
+                  <span>Cut All ({segments.length} Files)</span>
+                </button>
+              )}
+
+              {onMergeSegments && segments.length >= 2 && (
+                <button
+                  type="button"
+                  onClick={() => onMergeSegments(segments)}
+                  className="px-2 py-0.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[10px] flex items-center gap-1 shadow-sm transition active:scale-95"
+                  title="Losslessly stitch all queued clips into 1 continuous highlight video"
+                >
+                  <Zap className="w-3 h-3" />
+                  <span>Merge All (1 File)</span>
+                </button>
+              )}
+
+              {onClearSegments && (
+                <button
+                  type="button"
+                  onClick={onClearSegments}
+                  className="text-[10px] text-slate-400 hover:text-rose-500 px-1 py-0.5 transition"
+                  title="Clear all clips from queue"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
           </div>
 
           <div className="flex flex-wrap gap-1.5">

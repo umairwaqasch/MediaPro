@@ -1,16 +1,18 @@
 """Media serving & library management endpoints."""
 import os
 import shutil
+import re
 from pathlib import Path
 
-from fastapi import APIRouter, UploadFile, File, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, UploadFile, File, HTTPException, Header
+from fastapi.responses import FileResponse, StreamingResponse
 
 from app.config import UPLOAD_DIR, OUTPUT_DIR, THUMBNAIL_DIR, API_PREFIX
 from app.services.ffmpeg_service import probe_video
 from app.services.storage import (
     generate_video_id, get_upload_path, get_output_path,
     list_outputs, list_uploads, get_thumbnail_files,
+    clear_all_outputs, clear_all_uploads, clear_all_thumbnails, clear_entire_library,
 )
 from app.tasks.video_tasks import generate_thumbnails_task
 
@@ -31,6 +33,73 @@ def find_upload(video_id: str):
             if f == stripped or f.startswith(stripped) or f == clean_id:
                 return os.path.join(OUTPUT_DIR, f), Path(f).suffix or ".mp4"
     return None, ".mp4"
+
+
+def range_stream_file(file_path: str, range_header: str | None = None, media_type: str = "video/mp4", filename: str = ""):
+    """Stream media file with full HTTP 206 Byte-Range Partial Content support for 0ms instant playback and smooth scrubbing."""
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="File not found")
+        
+    file_size = os.path.getsize(file_path)
+    
+    if not range_header:
+        return FileResponse(
+            file_path,
+            media_type=media_type,
+            filename=filename or os.path.basename(file_path),
+            headers={"Accept-Ranges": "bytes"}
+        )
+    
+    range_match = re.match(r"bytes=(\d+)-(\d*)", range_header.strip())
+    if not range_match:
+        return FileResponse(
+            file_path,
+            media_type=media_type,
+            filename=filename or os.path.basename(file_path),
+            headers={"Accept-Ranges": "bytes"}
+        )
+    
+    start = int(range_match.group(1))
+    end_str = range_match.group(2)
+    end = int(end_str) if end_str else file_size - 1
+    
+    if start >= file_size or start > end:
+        raise HTTPException(
+            status_code=416,
+            detail="Requested range not satisfiable",
+            headers={"Content-Range": f"bytes */{file_size}"}
+        )
+    
+    end = min(end, file_size - 1)
+    content_length = end - start + 1
+    
+    def file_chunk_generator(start_pos: int, total_len: int, chunk_size: int = 512 * 1024):
+        with open(file_path, "rb") as f:
+            f.seek(start_pos)
+            bytes_left = total_len
+            while bytes_left > 0:
+                to_read = min(bytes_left, chunk_size)
+                data = f.read(to_read)
+                if not data:
+                    break
+                bytes_left -= len(data)
+                yield data
+                
+    headers = {
+        "Content-Range": f"bytes {start}-{end}/{file_size}",
+        "Accept-Ranges": "bytes",
+        "Content-Length": str(content_length),
+        "Content-Type": media_type,
+    }
+    if filename:
+        headers["Content-Disposition"] = f'inline; filename="{filename}"'
+        
+    return StreamingResponse(
+        file_chunk_generator(start, content_length),
+        status_code=206,
+        headers=headers,
+        media_type=media_type,
+    )
 
 
 # ---------- Upload ----------
@@ -147,7 +216,86 @@ async def get_output_thumbnail(filename: str):
     raise HTTPException(status_code=404, detail="Could not generate thumbnail")
 
 
-# ---------- Delete ----------
+from fastapi import APIRouter, UploadFile, File, HTTPException, Header, BackgroundTasks, Response
+
+@router.get("/media/download-zip")
+@router.get("/outputs/download-zip")
+async def download_outputs_zip(files: str, zip_name: str = "mediapro_export.zip", background_tasks: BackgroundTasks = None):
+    """
+    Package multiple output video files into a zip archive and stream it directly for instant 1-click batch download.
+    """
+    import zipfile
+    import tempfile
+
+    file_list = [f.strip() for f in files.split(",") if f.strip()]
+    if not file_list:
+        raise HTTPException(status_code=400, detail="No files specified for zip packaging")
+
+    temp_zip = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
+    temp_zip_path = temp_zip.name
+    temp_zip.close()
+
+    added_count = 0
+    with zipfile.ZipFile(temp_zip_path, "w", zipfile.ZIP_STORED) as zip_file:
+        for fname in file_list:
+            safe_name = os.path.basename(fname)
+            file_path = os.path.join(OUTPUT_DIR, safe_name)
+            if os.path.exists(file_path):
+                zip_file.write(file_path, arcname=safe_name)
+                added_count += 1
+
+    if added_count == 0:
+        if os.path.exists(temp_zip_path):
+            os.remove(temp_zip_path)
+        raise HTTPException(status_code=404, detail="None of the specified files were found in outputs")
+
+    clean_zip_name = os.path.basename(zip_name) if zip_name.endswith(".zip") else f"{os.path.basename(zip_name)}.zip"
+
+    if background_tasks:
+        background_tasks.add_task(os.remove, temp_zip_path)
+
+    return FileResponse(
+        temp_zip_path,
+        media_type="application/zip",
+        filename=clean_zip_name,
+        headers={"Content-Disposition": f'attachment; filename="{clean_zip_name}"'},
+    )
+
+
+# ---------- Bulk Clear & Purge Operations (Defined BEFORE dynamic path params) ----------
+@router.delete("/outputs/clear")
+@router.delete("/media/outputs/clear")
+def clear_outputs_endpoint():
+    """Purge all generated export videos and thumbnails from disk."""
+    count = clear_all_outputs()
+    return {"status": "SUCCESS", "message": f"Purged {count} output files and thumbnails from disk."}
+
+
+@router.delete("/uploads/clear")
+@router.delete("/media/uploads/clear")
+def clear_uploads_endpoint():
+    """Purge all uploaded source videos from disk."""
+    count = clear_all_uploads()
+    return {"status": "SUCCESS", "message": f"Purged {count} uploaded source videos from disk."}
+
+
+@router.delete("/thumbnails/clear")
+@router.delete("/media/thumbnails/clear")
+def clear_thumbnails_endpoint():
+    """Purge all cached thumbnail images from disk to reclaim storage."""
+    count = clear_all_thumbnails()
+    return {"status": "SUCCESS", "message": f"Purged {count} thumbnail files from disk."}
+
+
+@router.delete("/library/clear")
+@router.delete("/media/library/clear")
+def clear_library_endpoint():
+    """Wipe all video uploads, outputs, and thumbnails from disk."""
+    res = clear_entire_library()
+    return {"status": "SUCCESS", "details": res, "message": f"Purged {res['total_deleted']} video assets from library."}
+
+
+# ---------- Delete (Individual items) ----------
 @router.delete("/outputs/{filename}")
 async def delete_output(filename: str):
     safe = os.path.basename(filename)
@@ -180,16 +328,17 @@ async def delete_uploaded_source(video_id: str):
 
 # ---------- Media streaming ----------
 @router.get("/media/upload/{video_id}")
-async def stream_upload_video(video_id: str):
+async def stream_upload_video(video_id: str, range: str | None = Header(None)):
     safe_id = os.path.basename(video_id)
-    matched, _ = find_upload(safe_id)
+    matched, ext = find_upload(safe_id)
     if not matched or not os.path.exists(matched):
         raise HTTPException(status_code=404, detail="Video not found")
-    return FileResponse(matched, media_type="video/mp4", filename=os.path.basename(matched))
+    media_type = "video/mp4" if ext == ".mp4" else "video/quicktime" if ext == ".mov" else "video/webm" if ext == ".webm" else "video/mp4"
+    return range_stream_file(matched, range_header=range, media_type=media_type, filename=os.path.basename(matched))
 
 
 @router.get("/media/output/{filename}")
-async def stream_output_video(filename: str):
+async def stream_output_video(filename: str, range: str | None = Header(None)):
     safe = os.path.basename(filename)
     fp = os.path.join(OUTPUT_DIR, safe)
     if not os.path.exists(fp):
@@ -205,7 +354,11 @@ async def stream_output_video(filename: str):
         media_type = "image/png"
     elif safe.endswith((".jpg", ".jpeg")):
         media_type = "image/jpeg"
-    return FileResponse(fp, media_type=media_type, filename=safe)
+    elif safe.endswith(".webm"):
+        media_type = "video/webm"
+    elif safe.endswith(".mov"):
+        media_type = "video/quicktime"
+    return range_stream_file(fp, range_header=range, media_type=media_type, filename=safe)
 
 
 @router.get("/media/thumbnail/{filename}")

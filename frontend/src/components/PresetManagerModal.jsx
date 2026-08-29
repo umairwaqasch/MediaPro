@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Bookmark,
   X,
@@ -59,7 +59,9 @@ export default function PresetManagerModal({
   const [favorites, setFavorites] = useState(() => {
     try {
       const saved = localStorage.getItem('vp_preset_favorites');
-      return saved ? JSON.parse(saved) : [];
+      if (!saved) return [];
+      const parsed = JSON.parse(saved);
+      return Array.isArray(parsed) ? parsed : [];
     } catch {
       return [];
     }

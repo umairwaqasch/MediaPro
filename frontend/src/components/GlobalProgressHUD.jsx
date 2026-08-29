@@ -144,49 +144,133 @@ export default function GlobalProgressHUD({
                 </div>
               )}
 
-              {/* Completion Success Card */}
+              {/* Completion Success Card (Single or Multi-Cut Batch) */}
               {isComplete && result && (
                 <div className="space-y-3 animate-in fade-in duration-200">
-                  <div className="p-2.5 rounded-xl bg-emerald-500/5 dark:bg-emerald-500/10 border border-emerald-500/20 text-xs flex flex-col gap-1">
-                    <div className="font-semibold text-emerald-700 dark:text-emerald-400 truncate">
-                      {result.output_filename}
-                    </div>
-                    {result.file_size && (
-                      <div className="text-[10px] text-slate-500 dark:text-zinc-400 font-mono">
-                        Size: {formatBytes(result.file_size)}
+                  {result.is_batch && Array.isArray(result.items) && result.items.length > 0 ? (
+                    /* Multi-Cut Batch Results */
+                    <div className="space-y-2.5">
+                      <div className="flex items-center justify-between text-xs font-semibold text-emerald-700 dark:text-emerald-400">
+                        <span>All {result.items.length} Clips Ready</span>
+                        <span className="text-[10px] font-mono font-normal text-slate-500 dark:text-zinc-400">Multi-Cut Export</span>
                       </div>
-                    )}
-                  </div>
 
-                  <div className="flex items-center gap-2">
-                    {onPlayResult && (
-                      <button
-                        onClick={() => onPlayResult(result.output_filename)}
-                        className="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl bg-cyan-500 text-zinc-950 font-bold text-xs hover:bg-cyan-400 transition shadow-sm active:scale-95"
-                      >
-                        <Play className="w-3.5 h-3.5 fill-current" />
-                        <span>Preview</span>
-                      </button>
-                    )}
+                      {/* Scrollable list of generated clips */}
+                      <div className="max-h-48 overflow-y-auto space-y-1.5 pr-0.5 custom-scrollbar">
+                        {result.items.map((item, idx) => {
+                          const itemDownloadUrl = `/mediapro/api/media/output/${item.output_filename}`;
+                          return (
+                            <div
+                              key={idx}
+                              className="p-2 rounded-xl bg-slate-50 dark:bg-zinc-900/90 border border-slate-200 dark:border-zinc-800 text-[11px] flex items-center justify-between gap-2 shadow-sm"
+                            >
+                              <div className="min-w-0 flex-1">
+                                <div className="font-semibold text-slate-800 dark:text-zinc-200 truncate font-mono" title={item.output_filename}>
+                                  Clip #{item.clip_index || idx + 1}: {item.output_filename}
+                                </div>
+                                <div className="text-[10px] text-slate-500 dark:text-zinc-400 font-mono">
+                                  {item.file_size ? formatBytes(item.file_size) : ''}
+                                  {item.duration ? ` • ${item.duration.toFixed(1)}s` : ''}
+                                </div>
+                              </div>
 
-                    <button
-                      onClick={handleSaveAs}
-                      disabled={isSavingAs}
-                      className="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 dark:hover:bg-zinc-700 text-slate-800 dark:text-zinc-200 font-semibold text-xs border border-slate-200 dark:border-zinc-700 transition active:scale-95"
-                    >
-                      {savedSuccess ? (
-                        <>
-                          <FolderCheck className="w-3.5 h-3.5 text-emerald-500" />
-                          <span>Saved!</span>
-                        </>
-                      ) : (
-                        <>
+                              <div className="flex items-center gap-1 shrink-0">
+                                {onPlayResult && (
+                                  <button
+                                    type="button"
+                                    onClick={() => onPlayResult(item.output_filename)}
+                                    className="p-1.5 rounded-lg bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 hover:bg-cyan-500 hover:text-zinc-950 transition"
+                                    title="Preview clip in player"
+                                  >
+                                    <Play className="w-3 h-3 fill-current" />
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => triggerBrowserDownload(itemDownloadUrl, item.output_filename)}
+                                  className="p-1.5 rounded-lg bg-slate-200 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300 hover:bg-slate-300 dark:hover:bg-zinc-700 transition"
+                                  title="Download this clip"
+                                >
+                                  <Download className="w-3 h-3" />
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+
+                      {/* Primary Batch ZIP Download Button */}
+                      {result.zip_url ? (
+                        <a
+                          href={result.zip_url}
+                          download={`mediapro_multicut_${result.items.length}_clips.zip`}
+                          className="w-full flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl bg-gradient-to-r from-emerald-600 via-teal-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white font-bold text-xs shadow-md transition active:scale-95 text-center"
+                        >
                           <Download className="w-3.5 h-3.5" />
-                          <span>{isSavingAs ? 'Saving...' : 'Download'}</span>
-                        </>
+                          <span>Download All ({result.items.length} Clips as .ZIP)</span>
+                        </a>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            result.items.forEach((item, idx) => {
+                              setTimeout(() => {
+                                triggerBrowserDownload(`/mediapro/api/media/output/${item.output_filename}`, item.output_filename);
+                              }, idx * 250);
+                            });
+                          }}
+                          className="w-full flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow transition active:scale-95"
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                          <span>Download All {result.items.length} Files</span>
+                        </button>
                       )}
-                    </button>
-                  </div>
+                    </div>
+                  ) : (
+                    /* Single File Result */
+                    <>
+                      <div className="p-2.5 rounded-xl bg-emerald-500/5 dark:bg-emerald-500/10 border border-emerald-500/20 text-xs flex flex-col gap-1">
+                        <div className="font-semibold text-emerald-700 dark:text-emerald-400 truncate">
+                          {result.output_filename}
+                        </div>
+                        {result.file_size && (
+                          <div className="text-[10px] text-slate-500 dark:text-zinc-400 font-mono">
+                            Size: {formatBytes(result.file_size)}
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        {onPlayResult && (
+                          <button
+                            onClick={() => onPlayResult(result.output_filename)}
+                            className="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl bg-cyan-500 text-zinc-950 font-bold text-xs hover:bg-cyan-400 transition shadow-sm active:scale-95"
+                          >
+                            <Play className="w-3.5 h-3.5 fill-current" />
+                            <span>Preview</span>
+                          </button>
+                        )}
+
+                        <button
+                          onClick={handleSaveAs}
+                          disabled={isSavingAs}
+                          className="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 dark:hover:bg-zinc-700 text-slate-800 dark:text-zinc-200 font-semibold text-xs border border-slate-200 dark:border-zinc-700 transition active:scale-95"
+                        >
+                          {savedSuccess ? (
+                            <>
+                              <FolderCheck className="w-3.5 h-3.5 text-emerald-500" />
+                              <span>Saved!</span>
+                            </>
+                          ) : (
+                            <>
+                              <Download className="w-3.5 h-3.5" />
+                              <span>{isSavingAs ? 'Saving...' : 'Download'}</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
 

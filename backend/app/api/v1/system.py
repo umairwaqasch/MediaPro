@@ -1,6 +1,8 @@
 """System & health endpoints — /health, /system/hardware, /system/telemetry."""
+import asyncio
 import subprocess
 import shutil
+import os
 from typing import Optional
 
 from fastapi import APIRouter
@@ -19,15 +21,10 @@ async def health():
 @router.get("/system/hardware")
 async def get_system_acceleration():
     """Return active hardware acceleration details (CUDA / NVENC vs CPU fallback)."""
-    return detect_hardware_acceleration()
+    return await asyncio.to_thread(detect_hardware_acceleration)
 
 
-@router.get("/system/telemetry")
-async def get_system_telemetry():
-    """
-    Return live GPU VRAM, CPU, RAM, disk, and Celery queue telemetry.
-    Uses nvidia-smi for GPU stats; gracefully falls back if not available.
-    """
+def _collect_telemetry_sync() -> dict:
     from app.celery_app import celery as celery_app
 
     result: dict = {
@@ -53,7 +50,7 @@ async def get_system_telemetry():
                 "--query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu",
                 "--format=csv,noheader,nounits",
             ],
-            timeout=5,
+            timeout=2,
             stderr=subprocess.DEVNULL,
         ).decode().strip().split(",")
         if len(smi_out) >= 5:
@@ -68,14 +65,14 @@ async def get_system_telemetry():
 
     # --- CPU / RAM ---
     try:
-        import os
         result["cpu_count"] = os.cpu_count()
-        with open("/proc/meminfo") as f:
-            mem = {line.split(":")[0]: int(line.split(":")[1].strip().split()[0]) for line in f}
-        total_kb = mem.get("MemTotal", 0)
-        avail_kb = mem.get("MemAvailable", 0)
-        result["ram_total_gb"] = round(total_kb / 1024 / 1024, 2)
-        result["ram_used_gb"] = round((total_kb - avail_kb) / 1024 / 1024, 2)
+        if os.path.exists("/proc/meminfo"):
+            with open("/proc/meminfo") as f:
+                mem = {line.split(":")[0]: int(line.split(":")[1].strip().split()[0]) for line in f}
+            total_kb = mem.get("MemTotal", 0)
+            avail_kb = mem.get("MemAvailable", 0)
+            result["ram_total_gb"] = round(total_kb / 1024 / 1024, 2)
+            result["ram_used_gb"] = round((total_kb - avail_kb) / 1024 / 1024, 2)
     except Exception:
         pass
 
@@ -88,12 +85,19 @@ async def get_system_telemetry():
 
     # --- Celery queue depth ---
     try:
-        inspect = celery_app.control.inspect(timeout=1.5)
-        active = inspect.active() or {}
-        reserved = inspect.reserved() or {}
-        result["celery_active"] = sum(len(v) for v in active.values())
-        result["celery_reserved"] = sum(len(v) for v in reserved.values())
+        inspect = celery_app.control.inspect(timeout=0.3)
+        if inspect:
+            active = inspect.active() or {}
+            reserved = inspect.reserved() or {}
+            result["celery_active"] = sum(len(v) for v in active.values())
+            result["celery_reserved"] = sum(len(v) for v in reserved.values())
     except Exception:
         pass
 
     return result
+
+
+@router.get("/system/telemetry")
+async def get_system_telemetry():
+    """Return live GPU VRAM, CPU, RAM, disk, and Celery queue telemetry (non-blocking)."""
+    return await asyncio.to_thread(_collect_telemetry_sync)

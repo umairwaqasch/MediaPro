@@ -165,11 +165,16 @@ export default function VideoLibrary({
   isLoading,
   onUploadFile,
   onAddToBatch,
+  onClearOutputs,
+  onClearUploads,
+  onPurgeThumbnails,
+  onClearLibrary,
 }) {
   const toast = useToast();
   const [filterTab, setFilterTab] = useState('all'); // 'all' | 'outputs' | 'uploads'
   const [searchQuery, setSearchQuery] = useState('');
   const [isUploading, setIsUploading] = useState(false);
+  const [showClearMenu, setShowClearMenu] = useState(false);
   const fileInputRef = useRef(null);
 
   if (!isOpen) return null;
@@ -219,7 +224,6 @@ export default function VideoLibrary({
     }
   };
 
-
   return (
     <div
       className="fixed inset-0 z-50 flex justify-end bg-black/70 backdrop-blur-sm animate-in fade-in duration-200"
@@ -262,9 +266,81 @@ export default function VideoLibrary({
               type="file"
               accept="video/*,audio/*"
               multiple
-              onChange={handleFileInputChange}
+              onChange={handleBulkUpload}
               className="hidden"
             />
+
+            {/* Storage Management Menu */}
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setShowClearMenu(!showClearMenu)}
+                className="p-2 rounded-xl bg-slate-100 dark:bg-studio-800 hover:bg-slate-200 dark:hover:bg-studio-700 text-slate-600 dark:text-slate-300 transition"
+                title="Storage & Cache Cleanup"
+              >
+                <Trash2 className="w-4 h-4 text-rose-500" />
+              </button>
+
+              {showClearMenu && (
+                <div className="absolute right-0 top-full mt-2 w-56 p-1.5 rounded-2xl bg-white dark:bg-studio-900 border border-slate-200 dark:border-studio-800 shadow-2xl z-50 text-xs space-y-1 animate-in fade-in zoom-in-95">
+                  <div className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">
+                    Storage Maintenance
+                  </div>
+                  {onPurgeThumbnails && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowClearMenu(false);
+                        onPurgeThumbnails();
+                      }}
+                      className="w-full text-left px-3 py-2 rounded-xl hover:bg-slate-100 dark:hover:bg-studio-800 text-slate-700 dark:text-slate-200 flex items-center gap-2"
+                    >
+                      <Sparkles className="w-3.5 h-3.5 text-cyan-500" />
+                      <span>Purge Thumbnail Cache</span>
+                    </button>
+                  )}
+                  {onClearOutputs && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowClearMenu(false);
+                        onClearOutputs();
+                      }}
+                      className="w-full text-left px-3 py-2 rounded-xl hover:bg-rose-50 dark:hover:bg-rose-950/40 text-rose-600 dark:text-rose-400 flex items-center gap-2"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Clear Export Renders</span>
+                    </button>
+                  )}
+                  {onClearUploads && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowClearMenu(false);
+                        onClearUploads();
+                      }}
+                      className="w-full text-left px-3 py-2 rounded-xl hover:bg-rose-50 dark:hover:bg-rose-950/40 text-rose-600 dark:text-rose-400 flex items-center gap-2"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Clear Uploaded Sources</span>
+                    </button>
+                  )}
+                  {onClearLibrary && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowClearMenu(false);
+                        onClearLibrary();
+                      }}
+                      className="w-full text-left px-3 py-2 rounded-xl hover:bg-rose-50 dark:hover:bg-rose-950/40 text-rose-600 dark:text-rose-400 font-bold border-t border-slate-100 dark:border-studio-800 flex items-center gap-2"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Wipe Entire Library</span>
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
 
             <button
               onClick={onRefresh}

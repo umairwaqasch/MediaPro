@@ -223,6 +223,7 @@ def cut_video(
             "-t", str(duration),
             "-c", "copy",
             "-avoid_negative_ts", "make_zero",
+            "-movflags", "+faststart",
             "-progress", "pipe:1",
             "-nostats",
             output_path,
@@ -262,7 +263,7 @@ def cut_video(
                 cmd += ["-af", ",".join(a_filters)]
             cmd += ["-c:a", "aac", "-b:a", "192k"]
 
-        cmd += ["-avoid_negative_ts", "make_zero", "-progress", "pipe:1", "-nostats", output_path]
+        cmd += ["-avoid_negative_ts", "make_zero", "-movflags", "+faststart", "-progress", "pipe:1", "-nostats", output_path]
 
     process = subprocess.Popen(
         cmd,
@@ -461,6 +462,7 @@ def concatenate_videos(
         "-safe", "0",
         "-i", concat_list_file,
         "-c", "copy",
+        "-movflags", "+faststart",
         "-progress", "pipe:1",
         "-nostats",
         output_path,
@@ -632,7 +634,7 @@ def crop_video(
     else:
         cmd += ["-an"]
 
-    cmd += ["-avoid_negative_ts", "make_zero", "-progress", "pipe:1", "-nostats", output_path]
+    cmd += ["-avoid_negative_ts", "make_zero", "-movflags", "+faststart", "-progress", "pipe:1", "-nostats", output_path]
 
     process = subprocess.Popen(
         cmd,
@@ -762,7 +764,7 @@ def burn_in_overlay(
     else:
         cmd += ["-an"]
 
-    cmd += ["-avoid_negative_ts", "make_zero", "-progress", "pipe:1", "-nostats", output_path]
+    cmd += ["-avoid_negative_ts", "make_zero", "-movflags", "+faststart", "-progress", "pipe:1", "-nostats", output_path]
 
     process = subprocess.Popen(
         cmd,
@@ -1037,7 +1039,7 @@ def compress_video_to_size(
     else:
         cmd += ["-an"]
 
-    cmd += ["-avoid_negative_ts", "make_zero", "-progress", "pipe:1", "-nostats", output_path]
+    cmd += ["-avoid_negative_ts", "make_zero", "-movflags", "+faststart", "-progress", "pipe:1", "-nostats", output_path]
 
     process = subprocess.Popen(
         cmd,
@@ -1246,6 +1248,7 @@ def stabilize_video(
             "-c:v", vcodec,
             "-preset", preset,
             "-c:a", "copy",
+            "-movflags", "+faststart",
             "-progress", "pipe:1",
             "-nostats",
             output_path,
@@ -1542,7 +1545,7 @@ def create_boomerang_loop(
             "-c:a", "aac",
         ]
 
-    cmd.extend(["-progress", "pipe:1", "-nostats", output_path])
+    cmd.extend(["-movflags", "+faststart", "-progress", "pipe:1", "-nostats", output_path])
 
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     total_out_duration = duration * 2 * loops / speed
@@ -1618,6 +1621,7 @@ def create_split_screen_comparison(
         "-c:v", vcodec,
         "-preset", preset,
         "-c:a", "copy",
+        "-movflags", "+faststart",
         "-progress", "pipe:1",
         "-nostats",
         output_path,
@@ -1911,7 +1915,7 @@ def rescale_video(
         cmd.extend(["-vf", filter_arg])
 
     cmd.extend(encoder_args)
-    cmd.extend(["-c:a", "aac", "-b:a", "192k", "-progress", "pipe:1", "-nostats", output_path])
+    cmd.extend(["-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", "-progress", "pipe:1", "-nostats", output_path])
 
     # 6. Execute with real-time progress parsing
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)

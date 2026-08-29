@@ -539,6 +539,8 @@ export default function VideoPlayer({
         <video
           ref={videoRef}
           src={videoSrc}
+          preload="auto"
+          playsInline
           onTimeUpdate={handleTimeUpdate}
           onLoadedMetadata={handleLoadedMetadata}
           onPlay={() => setIsPlaying(true)}

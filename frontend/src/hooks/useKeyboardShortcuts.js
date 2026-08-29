@@ -1,4 +1,4 @@
-﻿import { useEffect, useRef } from 'react';
+import { useEffect, useRef } from 'react';
 
 /**
  * Global Keyboard Shortcut Engine for Media Pro Workstation

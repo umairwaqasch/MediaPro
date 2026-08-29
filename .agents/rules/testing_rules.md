@@ -1,33 +1,24 @@
-﻿# Testing Rules: Headless & Command-Line Only
+# 🛡️ MediaPro Verification & Testing Rules (Strict Command-Line Only)
 
-## Core Rules
+### ⚠️ CRITICAL MANDATE: STRICTLY COMMAND-LINE VERIFICATION ONLY
+- **NEVER use browser subagents or GUI browser tools (`open_browser_url`, Playwright).**
+- **ALL verification, smoke testing, endpoint testing, UI asset testing, and end-to-end processing verification MUST be performed EXCLUSIVELY using command line tools (`run_command`) with Python scripts, cURL, or Docker commands.**
 
-### 1. Zero Mouse Takeover
-- NEVER spawn interactive browser sessions that move the user cursor or grab window focus.
-- NEVER use browser_subagent for any testing or health verification.
+---
 
-### 2. CLI & Headless Testing Only
-- Use curl.exe, PowerShell (Invoke-RestMethod), docker logs, docker exec, and headless API calls for all testing.
-- Use docker exec to run Python or bash checks inside containers.
+### Command-Line Verification Protocol
 
-### 3. Reproducible Test Scripts
-- Write automated diagnostic curl/PowerShell scripts to verify:
-  - Frontend SPA bundle (Nginx serving the React app at /mediapro)
-  - API endpoints (health, hardware, telemetry, library, video/image ops)
-  - Celery worker job dispatch and task status
-  - Nginx proxy routing and redirect rules
+1. **Routing & Static Asset Checks**:
+   - Verify HTTP 200 responses on `/`, `/mediapro/`, `/mediapro/index.html`, `/mediapro/assets/*.js`, and `/mediapro/assets/*.css` using `python` / `urllib.request`.
+   - Verify that all redirects preserve `$http_host` (port 8090).
 
-### 4. Smoke Test Suite (Run After Every Rebuild)
-Run the following minimum checks after any Docker image rebuild:
+2. **Backend API & Processing Checks**:
+   - Execute end-to-end lifecycle scripts:
+     1. Upload image/video via `multipart/form-data`.
+     2. Dispatch transformation / crop / filter / perspective crop / AI tasks.
+     3. Poll `/mediapro/api/image/batch/status` or task status endpoint.
+     4. Verify output file existence, HTTP downloadability, and dimensions.
 
-  curl.exe -s http://localhost:8090/mediapro/api/health
-  curl.exe -s http://localhost:8090/mediapro/api/system/hardware
-  curl.exe -s http://localhost:8090/mediapro/api/system/telemetry
-  curl.exe -s http://localhost:8090/mediapro/api/library/all
-  curl.exe -o /dev/null -w "%{http_code}" http://localhost:8090/mediapro
-
-All must return HTTP 200. API endpoints must return valid JSON.
-
-### 5. Error Verification
-- Always check docker logs (docker logs mediapro-api --tail 30) after a restart.
-- Confirm no ImportError, ModuleNotFoundError, or startup exceptions before calling an endpoint green.
+3. **Frontend Compilation & Syntax Integrity**:
+   - Verify bracket/syntax balance on all modified `.jsx` / `.js` files.
+   - Verify clean build output with `docker compose build proxy` or `npm run build`.

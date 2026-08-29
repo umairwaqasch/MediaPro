@@ -1,3 +1,4 @@
+import { useToast } from '../../context/ToastContext';
 import React, { useState, useEffect } from 'react';
 import ImageCanvas from './ImageCanvas';
 import ImageToolsMatrix from './ImageToolsMatrix';
@@ -6,29 +7,64 @@ import ImageBatchGallery from './ImageBatchGallery';
 import ImageBatchModal from './ImageBatchModal';
 import { Sparkles, Image as ImageIcon, FolderOpen, Layers, UploadCloud } from 'lucide-react';
 
+const DEFAULT_TOOL_STATE = {
+  target_width: null,
+  target_height: null,
+  scale_percent: 100,
+  rotate_angle: 0,
+  flip_horizontal: false,
+  flip_vertical: false,
+  aspect_ratio: 'none',
+  crop_x: null,
+  crop_y: null,
+  crop_w: null,
+  crop_h: null,
+  blur_bg_padding: false,
+  brightness: 1.0,
+  contrast: 1.0,
+  saturation: 1.0,
+  exposure: 0.0,
+  gamma: 1.0,
+  temperature: 0.0,
+  grayscale: false,
+  lut_preset: 'original',
+  sharpen: 0.0,
+  blur_type: 'none',
+  blur_radius: 0.0,
+  denoise: false,
+  watermark_text: '',
+  output_format: 'JPEG',
+  quality: 90,
+  optimize: true,
+};
+
+const DEFAULT_PERSPECTIVE_POINTS = [
+  [0.08, 0.08],
+  [0.92, 0.08],
+  [0.92, 0.92],
+  [0.08, 0.92],
+];
+
 export default function ImageStudio({
-  images,
+  images = [],
+  activeImage: parentActiveImage,
+  onSelectImage,
   onRefreshLibrary,
   onUploadImage,
   onDeleteImage,
   onClearLibrary,
   onOpenLibrary,
 }) {
-  const [activeImage, setActiveImage] = useState(null);
+  const toast = useToast();
+  const [activeImage, setActiveImage] = useState(parentActiveImage || null);
   const [previewImage, setPreviewImage] = useState(null);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [isLibraryOpen, setIsLibraryOpen] = useState(false);
   const [isBatchModalOpen, setIsBatchModalOpen] = useState(false);
   const [batchProgress, setBatchProgress] = useState(null);
   const [activeTab, setActiveTab] = useState('transforms');
 
   // Phase 4 Perspective Transform Points (Normalized 0.0 - 1.0)
-  const [perspectivePoints, setPerspectivePoints] = useState([
-    [0.08, 0.08],  // TL
-    [0.92, 0.08],  // TR
-    [0.92, 0.92],  // BR
-    [0.08, 0.92],  // BL
-  ]);
+  const [perspectivePoints, setPerspectivePoints] = useState(DEFAULT_PERSPECTIVE_POINTS);
 
   // Staged batch images
   const [stagedImages, setStagedImages] = useState(() => {
@@ -41,32 +77,7 @@ export default function ImageStudio({
   });
 
   // Tool parameters state
-  const [toolState, setToolState] = useState({
-    target_width: null,
-    target_height: null,
-    scale_percent: 100,
-    rotate_angle: 0,
-    flip_horizontal: false,
-    flip_vertical: false,
-    aspect_ratio: 'original',
-    blur_bg_padding: false,
-    brightness: 1.0,
-    contrast: 1.0,
-    saturation: 1.0,
-    exposure: 0.0,
-    gamma: 1.0,
-    temperature: 0.0,
-    grayscale: false,
-    lut_preset: 'original',
-    sharpen: 0.0,
-    blur_type: 'none',
-    blur_radius: 0.0,
-    denoise: false,
-    watermark_text: '',
-    output_format: 'JPEG',
-    quality: 90,
-    optimize: true,
-  });
+  const [toolState, setToolState] = useState(DEFAULT_TOOL_STATE);
 
   // Save staged images to localStorage
   useEffect(() => {
@@ -88,6 +99,7 @@ export default function ImageStudio({
       is_uploading: true,
     };
     setActiveImage(tempItem);
+    if (onSelectImage) onSelectImage(tempItem);
     setPreviewImage(null);
 
     // 2. Upload to server in background
@@ -99,12 +111,14 @@ export default function ImageStudio({
             ...data,
             id: data.image_id || data.id,
             image_id: data.image_id || data.id,
-            url: data.url || `/mediapro/api/image/uploads/${data.filename}`,
+            url: localBlobUrl || data.url || `/mediapro/api/image/uploads/${data.filename}`,
+            server_url: data.url || `/mediapro/api/image/uploads/${data.filename}`,
             width: data.width || 0,
             height: data.height || 0,
             is_uploading: false,
           };
           setActiveImage(fullItem);
+          if (onSelectImage) onSelectImage(fullItem);
           return fullItem;
         }
       } catch (err) {
@@ -114,12 +128,23 @@ export default function ImageStudio({
     return tempItem;
   };
 
-  // Set default active image if available
+  // Sync with parent active image
   useEffect(() => {
-    if (!activeImage && images && images.length > 0) {
-      setActiveImage(images[0]);
-    }
-  }, [images]);
+    setActiveImage(parentActiveImage || null);
+  }, [parentActiveImage]);
+
+  // Handle explicit Clear Canvas
+  const handleClearCanvas = () => {
+    setActiveImage(null);
+    setPreviewImage(null);
+    if (onSelectImage) onSelectImage(null);
+    try {
+      localStorage.removeItem('vp_active_image');
+    } catch {}
+    setToolState(DEFAULT_TOOL_STATE);
+    setPerspectivePoints(DEFAULT_PERSPECTIVE_POINTS);
+    toast.info('Canvas cleared');
+  };
 
   // Handle staging
   const handleAddToBatch = (img) => {
@@ -135,9 +160,13 @@ export default function ImageStudio({
   // Process Single Image
   const handleProcessImage = async () => {
     if (!activeImage) return;
+    const imageId = activeImage.image_id || activeImage.id;
+    if (!imageId || String(imageId).startsWith('local_')) {
+      toast.info('Image is preparing. Please retry in a moment.');
+      return;
+    }
     setIsProcessing(true);
     try {
-      const imageId = activeImage.image_id || activeImage.id;
       const res = await fetch(`/mediapro/api/image/${imageId}/process`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -146,7 +175,15 @@ export default function ImageStudio({
       const data = await res.json();
       if (data.task_id) {
         // Poll for completion
+        let attempts = 0;
         const interval = setInterval(async () => {
+          attempts++;
+          if (attempts > 30) {
+            clearInterval(interval);
+            setIsProcessing(false);
+            toast.error('Processing timed out.');
+            return;
+          }
           const statusRes = await fetch(`/mediapro/api/image/batch/status`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -154,20 +191,34 @@ export default function ImageStudio({
           });
           const statusData = await statusRes.json();
           const t = statusData.tasks?.[data.task_id];
-          if (t?.state === 'SUCCESS') {
+          const isDone = t?.status === 'SUCCESS' || t?.state === 'SUCCESS';
+          const isFailed = t?.status === 'FAILURE' || t?.state === 'FAILURE';
+          if (isDone) {
             clearInterval(interval);
             setIsProcessing(false);
-            onRefreshLibrary();
-            if (t.result?.url) {
-              setPreviewImage(t.result.url);
+            if (onRefreshLibrary) onRefreshLibrary();
+            const resData = t.result || t;
+            if (resData?.url) {
+              const updated = {
+                id: resData.output_filename || ('out_' + Date.now()),
+                image_id: resData.output_filename || ('out_' + Date.now()),
+                filename: resData.output_filename,
+                url: resData.url,
+                width: resData.width,
+                height: resData.height,
+                is_uploading: false,
+              };
+              setActiveImage(updated);
+              if (onSelectImage) onSelectImage(updated);
+              setPreviewImage(resData.url);
             }
-            toast.success('Image processed successfully!');
-          } else if (t?.state === 'FAILURE') {
+            toast.success('Image processed & staged on canvas!');
+          } else if (isFailed) {
             clearInterval(interval);
             setIsProcessing(false);
-            toast.error(`Processing failed: ${t.error}`);
+            toast.error(`Processing failed: ${t.error || 'Server error'}`);
           }
-        }, 1000);
+        }, 500);
       }
     } catch (err) {
       setIsProcessing(false);
@@ -288,7 +339,7 @@ export default function ImageStudio({
           )}
 
           <button
-            onClick={onOpenLibrary || (() => setIsLibraryOpen(true))}
+            onClick={onOpenLibrary}
             className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-slate-100 dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 hover:border-cyan-500/40 text-xs font-semibold text-slate-700 dark:text-zinc-200 hover:text-slate-900 dark:hover:text-white transition-all shadow-sm active:scale-95"
           >
             <FolderOpen className="w-4 h-4 text-cyan-600 dark:text-cyan-400" />
@@ -300,7 +351,7 @@ export default function ImageStudio({
       {/* Main Studio Grid */}
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-4 items-start">
         {/* Left / Top: Interactive Image Canvas (7 cols) */}
-        <div className="xl:col-span-7 h-[580px] xl:h-[680px]">
+        <div className="xl:col-span-7 h-[640px] xl:h-[720px] overflow-hidden">
           <ImageCanvas
             activeImage={activeImage}
             previewImage={previewImage}
@@ -310,15 +361,12 @@ export default function ImageStudio({
             perspectivePoints={perspectivePoints}
             onUpdatePerspectivePoints={setPerspectivePoints}
             onUploadImage={handleUploadAndSelect}
-            onClearCanvas={() => {
-              setActiveImage(null);
-              setPreviewImage(null);
-            }}
+            onClearCanvas={handleClearCanvas}
           />
         </div>
 
         {/* Right / Bottom: Dual-Card Tools Matrix (5 cols) */}
-        <div className="xl:col-span-5 h-[580px] xl:h-[680px]">
+        <div className="xl:col-span-5 h-[640px] xl:h-[720px] overflow-hidden">
           <ImageToolsMatrix
             toolState={toolState}
             onUpdateToolState={setToolState}
@@ -340,13 +388,13 @@ export default function ImageStudio({
       </div>
 
       {/* Bottom Batch Staging Shelf */}
-      <div className="mt-2">
+      <div className="mt-4">
         <ImageBatchGallery
           stagedImages={stagedImages}
           onRemoveStaged={handleRemoveStaged}
           onClearAll={() => setStagedImages([])}
           onOpenBatchModal={() => setIsBatchModalOpen(true)}
-          onOpenLibrary={onOpenLibrary || (() => setIsLibraryOpen(true))}
+          onOpenLibrary={onOpenLibrary}
           onSelectForEdit={(img) => {
             setActiveImage(img);
             setPreviewImage(null);
@@ -354,19 +402,7 @@ export default function ImageStudio({
         />
       </div>
 
-      {/* Image Media Library Drawer */}
-      <ImageLibrary
-        isOpen={isLibraryOpen}
-        onClose={() => setIsLibraryOpen(false)}
-        images={images}
-        onSelectImage={(img) => {
-          setActiveImage(img);
-          setPreviewImage(null);
-        }}
-        onUploadImage={handleUploadAndSelect}
-        onDeleteImage={onDeleteImage}
-        onAddToBatch={handleAddToBatch}
-      />
+
 
       {/* Image Batch Modal */}
       <ImageBatchModal

@@ -91,6 +91,7 @@ export const DEFAULT_SETTINGS = {
 };
 
 export default function SettingsModal({ isOpen, onClose, settings, onUpdateSettings, hardwareInfo }) {
+  const toast = useToast();
   const [activeCategory, setActiveCategory] = useState('features'); // 'features' | 'storage' | 'imageStudio' | 'player' | 'engine' | 'layout'
   const [localSettings, setLocalSettings] = useState(settings || DEFAULT_SETTINGS);
   const [showSavedToast, setShowSavedToast] = useState(false);

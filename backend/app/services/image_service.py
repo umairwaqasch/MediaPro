@@ -339,15 +339,30 @@ def crop_image(
             return img.crop((x1, y1, x2, y2))
 
     # 2. Aspect Ratio Crop
-    if aspect_ratio:
+    if aspect_ratio and aspect_ratio not in ("original", "auto", "none"):
         ratio_map = {
             "1:1": (1, 1),
+            "square": (1, 1),
+            "square_1_1": (1, 1),
             "4:3": (4, 3),
+            "classic": (4, 3),
             "3:4": (3, 4),
             "16:9": (16, 9),
+            "youtube": (16, 9),
             "9:16": (9, 16),
+            "tiktok": (9, 16),
             "4:5": (4, 5),
+            "social": (4, 5),
+            "2:3": (2, 3),
+            "3:2": (3, 2),
             "21:9": (21, 9),
+            "a4": (1000, 1414),
+            "a4_portrait": (1000, 1414),
+            "a4_landscape": (1414, 1000),
+            "us_letter": (850, 1100),
+            "letter": (850, 1100),
+            "us_legal": (850, 1400),
+            "legal": (850, 1400),
         }
         if aspect_ratio in ratio_map:
             target_rw, target_rh = ratio_map[aspect_ratio]
@@ -472,9 +487,9 @@ def process_image_pipeline(
         # Respect EXIF orientation tag if present
         img = ImageOps.exif_transpose(src_img) or src_img.copy()
 
-    # Step 1: Rotate & Flip
-    if rotate_angle in (90, 180, 270):
-        img = img.rotate(-rotate_angle, expand=True)
+    # Step 1: Rotate (Continuous 0-360 deg) & Flip
+    if rotate_angle and (rotate_angle % 360) != 0:
+        img = img.rotate(-rotate_angle, expand=True, resample=Image.Resampling.BICUBIC)
     if flip_horizontal:
         img = ImageOps.mirror(img)
     if flip_vertical:
@@ -483,16 +498,20 @@ def process_image_pipeline(
     if progress_callback:
         progress_callback(25.0, "Applying crop and canvas formatting...")
 
-    # Step 2: Crop & Canvas Padding
-    img = crop_image(
-        img,
-        crop_x=crop_x,
-        crop_y=crop_y,
-        crop_w=crop_w,
-        crop_h=crop_h,
-        aspect_ratio=aspect_ratio,
-        blur_bg_padding=blur_bg_padding,
-    )
+    # Step 2: Crop & Canvas Padding (Only applied if aspect ratio or custom crop is explicitly requested)
+    is_aspect_crop = aspect_ratio and str(aspect_ratio).lower() not in ("none", "original", "auto", "null")
+    is_custom_crop = crop_w is not None and crop_h is not None and (float(crop_w) < 0.99 or float(crop_h) < 0.99 or float(crop_x or 0) > 0.01 or float(crop_y or 0) > 0.01)
+
+    if is_aspect_crop or is_custom_crop:
+        img = crop_image(
+            img,
+            crop_x=crop_x,
+            crop_y=crop_y,
+            crop_w=crop_w,
+            crop_h=crop_h,
+            aspect_ratio=aspect_ratio if is_aspect_crop else None,
+            blur_bg_padding=blur_bg_padding,
+        )
 
     # Step 3: Rescale / Resize
     resample_map = {

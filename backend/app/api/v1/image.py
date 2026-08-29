@@ -1,8 +1,10 @@
 """Image processing domain router — all /image/* endpoints."""
 import os
 import shutil
+import asyncio
 from pathlib import Path
 from typing import Dict, List, Any, Optional
+from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter, UploadFile, File, HTTPException, Body
 from fastapi.responses import FileResponse
@@ -34,21 +36,15 @@ from celery.result import AsyncResult
 
 router = APIRouter(tags=["Image"])
 
+# Shared threadpool for CPU/IO-bound image operations
+_io_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="img_io")
 
-# ==============================================================================
-# 1. UPLOAD & INGESTION
-# ==============================================================================
-@router.post("/image/upload")
-@router.post("/image/library/upload")
-async def upload_image(file: UploadFile = File(...)):
-    """Upload a source image with fast direct memory buffer and probe its metadata with instant thumbnail generation."""
-    image_id = generate_image_id()
-    orig_filename = file.filename or "image.jpg"
-    dest_path = get_image_upload_path(image_id, orig_filename)
-    contents = await file.read()
+
+def _sync_save_and_probe(contents: bytes, dest_path: str, thumb_path: str, image_id: str):
+    """Synchronous file write + thumbnail generation + metadata probe.
+    Runs in a threadpool to avoid blocking the event loop."""
     with open(dest_path, "wb") as buffer:
         buffer.write(contents)
-    thumb_path = get_image_thumbnail_path(image_id)
     try:
         generate_image_thumbnail(dest_path, thumb_path)
     except Exception:
@@ -63,17 +59,39 @@ async def upload_image(file: UploadFile = File(...)):
 
 
 # ==============================================================================
+# 1. UPLOAD & INGESTION
+# ==============================================================================
+@router.post("/image/upload")
+@router.post("/image/library/upload")
+async def upload_image(file: UploadFile = File(...)):
+    """Upload a source image — file read is async, disk write + PIL probe run in threadpool."""
+    image_id = generate_image_id()
+    orig_filename = file.filename or "image.jpg"
+    dest_path = get_image_upload_path(image_id, orig_filename)
+    # Async read from the upload stream (non-blocking)
+    contents = await file.read()
+    thumb_path = get_image_thumbnail_path(image_id)
+    # Offload ALL synchronous I/O (disk write + PIL thumbnail + PIL probe) to threadpool
+    loop = asyncio.get_running_loop()
+    meta = await loop.run_in_executor(
+        _io_pool, _sync_save_and_probe, contents, dest_path, thumb_path, image_id
+    )
+    return meta
+
+
+# ==============================================================================
 # 2. STATIC LIBRARY & BATCH WORKERS (MUST PRECEDE DYNAMIC PATH PARAMS)
 # ==============================================================================
 @router.get("/image/library/all")
 @router.get("/image/library")
-async def get_image_library():
+def get_image_library():
+    """Non-async: FastAPI auto-runs in threadpool so filesystem I/O doesn't block event loop."""
     items = list_all_images()
     return {"items": items, "count": len(items)}
 
 
 @router.delete("/image/library/clear")
-async def clear_image_library_endpoint():
+def clear_image_library_endpoint():
     """Wipe all images, outputs, and thumbnails from library."""
     count = clear_all_image_library()
     return {"status": "SUCCESS", "message": f"Purged {count} images and thumbnails from library."}
@@ -99,66 +117,53 @@ async def batch_ai_process_endpoint(req: AIBatchProcessRequest):
 async def get_image_batch_status(payload: Dict[str, List[str]]):
     task_ids = payload.get("task_ids", [])
     results = {}
-    completed_count = failed_count = 0
     for tid in task_ids:
         res = AsyncResult(tid, app=celery)
-        state = res.state
-        meta = res.info if isinstance(res.info, dict) else {}
-        if state == "SUCCESS":
-            completed_count += 1
-            results[tid] = {"state": state, "percent": 100.0, "result": res.result}
-        elif state == "PROGRESS":
-            results[tid] = {"state": state, "percent": meta.get("percent", 0.0), "message": meta.get("message", "Processing...")}
-        elif state == "FAILURE":
-            failed_count += 1
-            results[tid] = {"state": state, "percent": 0.0, "error": str(res.result)}
+        state_str = res.state
+        if state_str == "PENDING":
+            results[tid] = {"status": "PENDING", "state": "PENDING"}
+        elif state_str == "SUCCESS":
+            results[tid] = {"status": "SUCCESS", "state": "SUCCESS", "result": res.result}
+        elif state_str == "FAILURE":
+            results[tid] = {"status": "FAILURE", "state": "FAILURE", "error": str(res.result)}
         else:
-            results[tid] = {"state": state, "percent": 0.0, "message": "Pending..."}
-    return {
-        "all_done": (completed_count + failed_count) == len(task_ids),
-        "is_all_finished": (completed_count + failed_count) == len(task_ids),
-        "completed": completed_count,
-        "completed_count": completed_count,
-        "failed": failed_count,
-        "failed_count": failed_count,
-        "total": len(task_ids),
-        "tasks": results
-    }
+            results[tid] = {"status": state_str, "state": state_str, "info": str(res.info) if res.info else None}
+    return {"tasks": results}
 
 
 # ==============================================================================
-# 3. MULTI-IMAGE COMPOSITING (COLLAGE, SLIDESHOW, CHROMAKEY)
+# 3. COMPOSITING & CREATIVE TOOLS
 # ==============================================================================
 @router.post("/image/chromakey")
 async def chromakey_standalone_endpoint(payload: dict = Body(...)):
-    img_id = payload.get("image_id") or payload.get("id")
-    if not img_id:
-        raise HTTPException(status_code=400, detail="Missing image_id")
-    img_path = find_image_file(img_id)
+    image_id = payload.get("image_id")
+    if not image_id:
+        raise HTTPException(status_code=400, detail="image_id required")
+    img_path = find_image_file(image_id)
     if not img_path:
-        raise HTTPException(status_code=404, detail=f"Image not found: {img_id}")
-    task = chroma_key_image_task.delay(img_id, payload)
-    return {"task_id": task.id, "status": "QUEUED", "message": "Chroma key task queued"}
+        raise HTTPException(status_code=404, detail="Image not found")
+    task = chroma_key_image_task.delay(image_id, payload)
+    return {"task_id": task.id, "status": "QUEUED"}
 
 
 @router.post("/image/collage")
 async def create_collage_endpoint(req: CollageRequest):
     if len(req.image_ids) < 2:
         raise HTTPException(status_code=400, detail="Collage requires at least 2 images")
-    task = create_collage_task.delay(req.image_ids, req.layout, req.border_width, req.border_color)
-    return {"task_id": task.id, "status": "QUEUED", "message": "Collage task queued"}
+    task = create_collage_task.delay(req.image_ids, req.layout, req.model_dump())
+    return {"task_id": task.id, "status": "QUEUED"}
 
 
 @router.post("/image/slideshow")
 async def create_slideshow_endpoint(req: ImageSlideshowRequest):
     if len(req.image_ids) < 2:
         raise HTTPException(status_code=400, detail="Slideshow requires at least 2 images")
-    task = create_slideshow_task.delay(req.image_ids, req.seconds_per_slide)
-    return {"task_id": task.id, "status": "QUEUED", "message": "Slideshow task queued"}
+    task = create_slideshow_task.delay(req.image_ids, req.model_dump())
+    return {"task_id": task.id, "status": "QUEUED"}
 
 
 @router.post("/image/gif")
-async def create_image_gif_endpoint(req: ImageGifFromSequenceRequest):
+def create_image_gif_endpoint(req: ImageGifFromSequenceRequest):
     if len(req.image_ids) < 2:
         raise HTTPException(status_code=400, detail="GIF requires at least 2 images")
     from app.services.compositing_service import create_image_sequence_gif
@@ -173,7 +178,7 @@ async def create_image_gif_endpoint(req: ImageGifFromSequenceRequest):
 # 4. EXIF, PALETTE & HISTOGRAM DIAGNOSTICS
 # ==============================================================================
 @router.get("/image/exif/{image_id}")
-async def get_image_exif_endpoint(image_id: str):
+def get_image_exif_endpoint(image_id: str):
     img_path = find_image_file(image_id)
     if not img_path:
         raise HTTPException(status_code=404, detail="Image not found")
@@ -181,7 +186,7 @@ async def get_image_exif_endpoint(image_id: str):
 
 
 @router.post("/image/exif/strip/{image_id}")
-async def strip_image_exif_endpoint(image_id: str):
+def strip_image_exif_endpoint(image_id: str):
     img_path = find_image_file(image_id)
     if not img_path:
         raise HTTPException(status_code=404, detail="Image not found")
@@ -192,7 +197,7 @@ async def strip_image_exif_endpoint(image_id: str):
 
 
 @router.get("/image/palette/{image_id}")
-async def get_image_palette_endpoint(image_id: str, count: int = 6):
+def get_image_palette_endpoint(image_id: str, count: int = 6):
     img_path = find_image_file(image_id)
     if not img_path:
         raise HTTPException(status_code=404, detail="Image not found")
@@ -201,7 +206,7 @@ async def get_image_palette_endpoint(image_id: str, count: int = 6):
 
 
 @router.get("/image/histogram/{image_id}")
-async def get_image_histogram_endpoint(image_id: str):
+def get_image_histogram_endpoint(image_id: str):
     img_path = find_image_file(image_id)
     if not img_path:
         raise HTTPException(status_code=404, detail="Image not found")
@@ -209,7 +214,7 @@ async def get_image_histogram_endpoint(image_id: str):
 
 
 @router.get("/image/probe/{image_id}")
-async def get_image_probe(image_id: str):
+def get_image_probe(image_id: str):
     img_path = find_image_file(image_id)
     if not img_path:
         raise HTTPException(status_code=404, detail="Image not found")
@@ -243,7 +248,7 @@ async def ai_process_image_endpoint(image_id: str, req: AIProcessRequest):
 
 
 @router.post("/image/{image_id}/perspective/detect")
-async def detect_document_corners_endpoint(image_id: str):
+def detect_document_corners_endpoint(image_id: str):
     img_path = find_image_file(image_id)
     if not img_path:
         raise HTTPException(status_code=404, detail="Image not found")
@@ -283,7 +288,7 @@ async def chromakey_image_endpoint(image_id: str, req: ChromaKeyRequest):
 # 6. SERVING & DELETION
 # ==============================================================================
 @router.get("/image/uploads/{filename_or_id}")
-async def serve_image_upload(filename_or_id: str):
+def serve_image_upload(filename_or_id: str):
     fpath = find_image_file(filename_or_id)
     if not fpath or not os.path.isfile(fpath):
         raise HTTPException(status_code=404, detail="Image not found")
@@ -293,7 +298,7 @@ async def serve_image_upload(filename_or_id: str):
 
 
 @router.get("/image/outputs/{filename}")
-async def serve_image_output(filename: str):
+def serve_image_output(filename: str):
     from app.config import IMAGE_OUTPUT_DIR
     safe = os.path.basename(filename)
     fpath = os.path.join(IMAGE_OUTPUT_DIR, safe)
@@ -307,28 +312,36 @@ async def serve_image_output(filename: str):
 
 
 @router.get("/image/thumbnail/{filename}")
-async def serve_image_thumbnail(filename: str):
+def serve_image_thumbnail(filename: str):
     from app.config import IMAGE_THUMBNAIL_DIR
     safe = os.path.basename(filename)
     fpath = os.path.join(IMAGE_THUMBNAIL_DIR, safe)
-    if not os.path.isfile(fpath):
-        base = safe.replace("_thumb.jpg", "")
-        fpath = find_image_file(base)
-    if not fpath or not os.path.isfile(fpath):
-        raise HTTPException(status_code=404, detail="Thumbnail not found")
-    return FileResponse(fpath, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=86400"})
+    if os.path.isfile(fpath):
+        return FileResponse(fpath, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=86400"})
+    
+    # Auto-generate thumbnail on the fly if missing!
+    base = safe.replace("_thumb.jpg", "")
+    src = find_image_file(base)
+    if src and os.path.isfile(src):
+        try:
+            generate_image_thumbnail(src, fpath)
+            return FileResponse(fpath, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=86400"})
+        except Exception:
+            return FileResponse(src, headers={"Cache-Control": "public, max-age=86400"})
+            
+    raise HTTPException(status_code=404, detail="Thumbnail not found")
 
 
 @router.delete("/image/uploads/{image_id}")
 @router.delete("/image/upload/{image_id}")
-async def delete_image_upload_endpoint(image_id: str):
+def delete_image_upload_endpoint(image_id: str):
     if not delete_image_upload(image_id):
         raise HTTPException(status_code=404, detail="Image upload not found")
     return {"status": "DELETED", "image_id": image_id}
 
 
 @router.delete("/image/outputs/{filename}")
-async def delete_image_output_endpoint(filename: str):
+def delete_image_output_endpoint(filename: str):
     if not delete_image_output(filename):
         raise HTTPException(status_code=404, detail="Image output not found")
     return {"status": "DELETED", "filename": filename}

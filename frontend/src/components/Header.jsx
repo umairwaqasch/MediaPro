@@ -1,4 +1,4 @@
-﻿import React from 'react';
+import React from 'react';
 import {
   Scissors,
   Layers,
@@ -130,7 +130,7 @@ export default function Header({
             <Cpu className="w-3.5 h-3.5 text-slate-400" />
           )}
           <span>
-            {telemetry.vram_used_gb !== undefined && telemetry.vram_total_gb
+            {telemetry?.vram_used_gb !== undefined && telemetry?.vram_total_gb
               ? `VRAM ${telemetry.vram_used_gb}/${telemetry.vram_total_gb}G`
               : 'CUDA Active'}
           </span>

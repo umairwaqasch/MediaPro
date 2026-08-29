@@ -50,7 +50,9 @@ export default function App() {
   const [activeVideo, setActiveVideo] = useState(() => {
     try {
       const saved = localStorage.getItem('vp_active_video');
-      return saved ? JSON.parse(saved) : null;
+      if (!saved) return null;
+      const parsed = JSON.parse(saved);
+      return (parsed && (parsed.id || parsed.video_id)) ? parsed : null;
     } catch {
       return null;
     }
@@ -93,15 +95,19 @@ export default function App() {
   const [stagedVideos, setStagedVideos] = useState(() => {
     try {
       const saved = localStorage.getItem('vp_staged_videos');
-      return saved ? JSON.parse(saved) : [];
+      if (!saved) return [];
+      const parsed = JSON.parse(saved);
+      return Array.isArray(parsed) ? parsed : [];
     } catch {
       return [];
     }
   });
   const [selectedStagedIds, setSelectedStagedIds] = useState(() => {
     try {
-      const saved = localStorage.getItem('vp_selected_staged');
-      return saved ? JSON.parse(saved) : [];
+      const saved = localStorage.getItem('vp_selected_staged_ids') || localStorage.getItem('vp_selected_staged');
+      if (!saved) return [];
+      const parsed = JSON.parse(saved);
+      return Array.isArray(parsed) ? parsed : [];
     } catch {
       return [];
     }
@@ -118,6 +124,22 @@ export default function App() {
   // Image Studio Library State
   const [imageLibrary, setImageLibrary] = useState([]);
   const [isImageLoading, setIsImageLoading] = useState(false);
+  const [activeStudioImage, setActiveStudioImage] = useState(() => {
+    try {
+      const saved = localStorage.getItem('vp_active_image');
+      if (!saved) return null;
+      const parsed = JSON.parse(saved);
+      return (parsed && (parsed.id || parsed.image_id || parsed.filename)) ? parsed : null;
+    } catch {
+      return null;
+    }
+  });
+
+  useEffect(() => {
+    if (activeStudioImage) {
+      localStorage.setItem('vp_active_image', JSON.stringify(activeStudioImage));
+    }
+  }, [activeStudioImage]);
 
   const handleToggleStudioMode = (mode) => {
     setActiveStudioMode(mode);
@@ -316,6 +338,66 @@ export default function App() {
         await fetchImageLibrary();
       } else {
         toast.error('Failed to clear library.');
+      }
+    } catch (err) {
+      toast.error(`Error clearing library: ${err.message}`);
+    }
+  };
+
+  const handleClearVideoOutputs = async () => {
+    try {
+      const res = await fetch('/mediapro/api/outputs/clear', { method: 'DELETE' });
+      if (res.ok) {
+        setOutputs([]);
+        toast.success('All export renders cleared from disk');
+        await fetchOutputs();
+      } else {
+        toast.error('Failed to clear export renders');
+      }
+    } catch (err) {
+      toast.error(`Error clearing exports: ${err.message}`);
+    }
+  };
+
+  const handleClearVideoUploads = async () => {
+    try {
+      const res = await fetch('/mediapro/api/uploads/clear', { method: 'DELETE' });
+      if (res.ok) {
+        setUploads([]);
+        toast.success('All source uploads cleared from disk');
+        await fetchOutputs();
+      } else {
+        toast.error('Failed to clear uploads');
+      }
+    } catch (err) {
+      toast.error(`Error clearing uploads: ${err.message}`);
+    }
+  };
+
+  const handlePurgeThumbnails = async () => {
+    try {
+      const res = await fetch('/mediapro/api/thumbnails/clear', { method: 'DELETE' });
+      if (res.ok) {
+        toast.success('Thumbnail cache purged successfully');
+        await fetchOutputs();
+      } else {
+        toast.error('Failed to purge thumbnails');
+      }
+    } catch (err) {
+      toast.error(`Error purging thumbnails: ${err.message}`);
+    }
+  };
+
+  const handleClearEntireVideoLibrary = async () => {
+    try {
+      const res = await fetch('/mediapro/api/library/clear', { method: 'DELETE' });
+      if (res.ok) {
+        setOutputs([]);
+        setUploads([]);
+        toast.success('All video library assets cleared from disk');
+        await fetchOutputs();
+      } else {
+        toast.error('Failed to clear library');
       }
     } catch (err) {
       toast.error(`Error clearing library: ${err.message}`);
@@ -684,9 +766,18 @@ export default function App() {
   };
 
   const handleSelectSegment = (seg) => {
+    if (!seg) return;
     setStartTime(seg.start_time);
     setEndTime(seg.end_time);
     setCurrentTime(seg.start_time);
+    
+    // Seek active video element and start playback
+    const videoEl = document.querySelector('video');
+    if (videoEl) {
+      videoEl.currentTime = seg.start_time;
+      videoEl.play().catch(() => {});
+    }
+    toast.info(`Playing Clip: ${formatTimecode(seg.start_time).split('.')[0]} → ${formatTimecode(seg.end_time).split('.')[0]}`);
   };
 
   const initTask = (message) => {
@@ -1240,6 +1331,125 @@ export default function App() {
     }
   };
 
+  // Multi-Task Progress Tracker for Batch Multi-Cut (Downloads & Saves Every Clip As It Finishes)
+  const trackMultiCutBatchProgress = (tasks) => {
+    if (!tasks || tasks.length === 0) return;
+
+    const totalTasks = tasks.length;
+    const completedMap = {};
+    let isAllDone = false;
+
+    const interval = setInterval(async () => {
+      if (isAllDone) {
+        clearInterval(interval);
+        return;
+      }
+
+      try {
+        for (const t of tasks) {
+          if (completedMap[t.task_id]) continue;
+
+          const res = await fetch(`/mediapro/api/tasks/${t.task_id}/status`);
+          if (res.ok) {
+            const data = await res.json();
+            if (data.state === 'SUCCESS') {
+              completedMap[t.task_id] = data.result || { output_filename: t.output_filename };
+              const filename = data.result?.output_filename || t.output_filename;
+              toast.success(`Exported Clip #${t.clip_index || Object.keys(completedMap).length}: ${filename}`);
+            } else if (data.state === 'FAILURE') {
+              completedMap[t.task_id] = { error: data.error || 'Failed' };
+              toast.error(`Clip #${t.clip_index} cut failed: ${data.error || 'Unknown error'}`);
+            }
+          }
+        }
+
+        const completedCount = Object.keys(completedMap).length;
+        const progressPct = Math.round((completedCount / totalTasks) * 100);
+        setTaskPercent(progressPct);
+        setTaskMessage(`Exporting Multi-Cut: ${completedCount} / ${totalTasks} clips completed (${progressPct}%)`);
+
+        if (completedCount >= totalTasks) {
+          isAllDone = true;
+          clearInterval(interval);
+          setIsProcessing(false);
+          setTaskStatus('SUCCESS');
+          setTaskPercent(100);
+          setTaskMessage(`All ${totalTasks} clips successfully cut and ready!`);
+
+          const items = tasks.map((t, idx) => {
+            const res = completedMap[t.task_id] || {};
+            return {
+              clip_index: t.clip_index || idx + 1,
+              output_filename: res.output_filename || t.output_filename,
+              file_size: res.file_size || 0,
+              start_time: t.start_time,
+              end_time: t.end_time,
+              duration: res.duration || ((t.end_time || 0) - (t.start_time || 0)),
+            };
+          });
+
+          const filenamesParam = encodeURIComponent(items.map((i) => i.output_filename).join(','));
+          const zipNameParam = encodeURIComponent(`mediapro_multicut_${totalTasks}_clips.zip`);
+          const zipUrl = `/mediapro/api/media/download-zip?files=${filenamesParam}&zip_name=${zipNameParam}`;
+
+          const batchResult = {
+            is_batch: true,
+            batch_type: 'multi_cut',
+            total_clips: totalTasks,
+            items: items,
+            zip_url: zipUrl,
+            output_filename: items[0]?.output_filename || '',
+          };
+
+          setTaskResult(batchResult);
+          fetchOutputs();
+          toast.success(`Successfully exported and saved all ${totalTasks} clips!`);
+          if (settings?.storage?.autoCloseModal) {
+            setTimeout(() => setIsProgressModalOpen(false), 1500);
+          }
+        }
+      } catch (err) {
+        console.error('Multi-cut polling error:', err);
+      }
+    }, 600);
+  };
+
+  // Multi-Cut (Export all queued segments into separate clip files simultaneously)
+  const handleBatchCutSegments = async (segsToCut) => {
+    const targetSegs = segsToCut || segments;
+    if (!activeVideo || targetSegs.length === 0) return;
+
+    initTask(`Exporting ${targetSegs.length} clips as separate files in parallel...`);
+
+    try {
+      const res = await fetch(`/mediapro/api/videos/${activeVideo.id}/multi-cut`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          segments: targetSegs.map((s, idx) => ({
+            start_time: s.start_time,
+            end_time: s.end_time,
+            label: s.label || `clip_${idx + 1}`,
+          })),
+          mode: 'fast',
+        }),
+      });
+
+      if (!res.ok) throw new Error('Multi-cut request failed');
+      const data = await res.json();
+
+      if (data.tasks && data.tasks.length > 0) {
+        setActiveTaskId(data.tasks[0].task_id);
+        trackMultiCutBatchProgress(data.tasks);
+        toast.info(`Queued ${data.total_clips} clips! Exporting in parallel...`);
+      }
+    } catch (err) {
+      setIsProcessing(false);
+      setTaskStatus('FAILURE');
+      setTaskError(err.message);
+    }
+  };
+
   // Task Progress Tracker
   const trackTaskProgress = (taskId) => {
     let completed = false;
@@ -1347,8 +1557,10 @@ export default function App() {
         },
       };
     });
-    if (meta.duration > 0) {
-      setEndTime((prevEnd) => (prevEnd === 0 ? meta.duration : prevEnd));
+    if (meta && meta.duration > 0) {
+      setStartTime((prevStart) => (prevStart >= meta.duration ? 0 : prevStart));
+      setEndTime((prevEnd) => (prevEnd === 0 || prevEnd > meta.duration ? meta.duration : prevEnd));
+      setCurrentTime((prevTime) => (prevTime > meta.duration ? 0 : prevTime));
     }
   };
 
@@ -1429,7 +1641,7 @@ export default function App() {
         onReset={handleReset}
         onOpenLibrary={() => setIsLibraryOpen(true)}
         onOpenSettings={() => setIsSettingsOpen(true)}
-        outputCount={outputs.length}
+        outputCount={activeStudioMode === 'image' ? imageLibrary.length : outputs.length}
         theme={theme}
         onToggleTheme={toggleTheme}
         hardwareInfo={hardwareInfo}
@@ -1455,9 +1667,13 @@ export default function App() {
           <div className="animate-in fade-in duration-300">
             <ImageStudio
               images={imageLibrary}
+              activeImage={activeStudioImage}
+              onSelectImage={setActiveStudioImage}
               onRefreshLibrary={fetchImageLibrary}
               onUploadImage={handleUploadImageFile}
               onDeleteImage={handleDeleteImageItem}
+              onClearLibrary={handleClearImageLibrary}
+              onOpenLibrary={() => setIsLibraryOpen(true)}
             />
           </div>
         ) : (
@@ -1526,6 +1742,9 @@ export default function App() {
                   segments={segments}
                   onSelectSegment={handleSelectSegment}
                   onRemoveSegment={handleRemoveSegment}
+                  onBatchCutSegments={handleBatchCutSegments}
+                  onMergeSegments={(segs) => handleConcatSubmit({ segments: segs, customName: '' })}
+                  onClearSegments={() => setSegments([])}
                   videoId={activeVideo.id}
                 />
 
@@ -1623,6 +1842,9 @@ export default function App() {
                     segments={segments}
                     onSelectSegment={handleSelectSegment}
                     onRemoveSegment={handleRemoveSegment}
+                    onBatchCutSegments={handleBatchCutSegments}
+                    onMergeSegments={(segs) => handleConcatSubmit({ segments: segs, customName: '' })}
+                    onClearSegments={() => setSegments([])}
                     videoId={activeVideo.id}
                   />
                 </div>
@@ -1744,6 +1966,10 @@ export default function App() {
         isLoading={isLibraryLoading}
         onUploadFile={handleUploadDirectToLibrary}
         onAddToBatch={handleStageFromLibrary}
+        onClearOutputs={handleClearVideoOutputs}
+        onClearUploads={handleClearVideoUploads}
+        onPurgeThumbnails={handlePurgeThumbnails}
+        onClearLibrary={handleClearEntireVideoLibrary}
       />
 
       <ImageLibrary
@@ -1751,9 +1977,17 @@ export default function App() {
         onClose={() => setIsLibraryOpen(false)}
         images={imageLibrary}
         onSelectImage={(img) => {
-          fetchImageLibrary();
+          setActiveStudioImage(img);
+          setIsLibraryOpen(false);
+          toast.success(`Loaded "${img.filename}" into workspace`);
         }}
-        onUploadImage={handleUploadImageFile}
+        onUploadImage={async (file) => {
+          const res = await handleUploadImageFile(file);
+          if (res) {
+            setActiveStudioImage(res);
+          }
+          return res;
+        }}
         onDeleteImage={handleDeleteImageItem}
         onClearLibrary={handleClearImageLibrary}
       />

@@ -64,8 +64,76 @@ def list_uploads() -> list[dict]:
 def get_thumbnail_files(video_id: str) -> list[str]:
     """Get list of thumbnail filenames for a given video."""
     thumbs = []
-    for f in sorted(os.listdir(THUMBNAIL_DIR)):
-        if f.startswith(video_id) and f.endswith(".jpg"):
-            thumbs.append(f)
+    if os.path.exists(THUMBNAIL_DIR):
+        for f in sorted(os.listdir(THUMBNAIL_DIR)):
+            if f.startswith(video_id) and f.endswith(".jpg"):
+                thumbs.append(f)
     return thumbs
+
+
+def clear_all_outputs() -> int:
+    """Purge all rendered output files from OUTPUT_DIR."""
+    count = 0
+    if os.path.exists(OUTPUT_DIR):
+        for f in os.listdir(OUTPUT_DIR):
+            fpath = os.path.join(OUTPUT_DIR, f)
+            if os.path.isfile(fpath):
+                try:
+                    os.remove(fpath)
+                    count += 1
+                except Exception:
+                    pass
+    # Also remove output poster thumbnails
+    if os.path.exists(THUMBNAIL_DIR):
+        for f in os.listdir(THUMBNAIL_DIR):
+            if f.startswith("out_poster_"):
+                try:
+                    os.remove(os.path.join(THUMBNAIL_DIR, f))
+                except Exception:
+                    pass
+    return count
+
+
+def clear_all_uploads() -> int:
+    """Purge all uploaded source files from UPLOAD_DIR."""
+    count = 0
+    if os.path.exists(UPLOAD_DIR):
+        for f in os.listdir(UPLOAD_DIR):
+            fpath = os.path.join(UPLOAD_DIR, f)
+            if os.path.isfile(fpath):
+                try:
+                    os.remove(fpath)
+                    count += 1
+                except Exception:
+                    pass
+    return count
+
+
+def clear_all_thumbnails() -> int:
+    """Purge all cached thumbnail images from THUMBNAIL_DIR to reclaim disk space."""
+    count = 0
+    if os.path.exists(THUMBNAIL_DIR):
+        for f in os.listdir(THUMBNAIL_DIR):
+            fpath = os.path.join(THUMBNAIL_DIR, f)
+            if os.path.isfile(fpath):
+                try:
+                    os.remove(fpath)
+                    count += 1
+                except Exception:
+                    pass
+    return count
+
+
+def clear_entire_library() -> dict:
+    """Purge all video uploads, outputs, and thumbnails."""
+    out_cnt = clear_all_outputs()
+    up_cnt = clear_all_uploads()
+    thumb_cnt = clear_all_thumbnails()
+    return {
+        "outputs_deleted": out_cnt,
+        "uploads_deleted": up_cnt,
+        "thumbnails_deleted": thumb_cnt,
+        "total_deleted": out_cnt + up_cnt + thumb_cnt,
+    }
+
 

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Industrial-grade In-Browser Screen & Camera Recording Engine
  * Utilizes WebRTC getDisplayMedia, getUserMedia, Web Audio API stereo mixer,
  * and MediaRecorder with hardware GPU acceleration.

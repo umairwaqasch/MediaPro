@@ -2,6 +2,7 @@ import os
 import cv2
 import numpy as np
 from PIL import Image
+from typing import Optional, List, Dict, Any
 
 def order_points(pts: np.ndarray) -> np.ndarray:
     """
@@ -29,7 +30,6 @@ def auto_detect_document_corners(image_path: str) -> list:
         return [[0.08, 0.08], [0.92, 0.08], [0.92, 0.92], [0.08, 0.92]]
 
     h, w = img.shape[:2]
-    img_area = h * w
 
     # Downscale for fast edge detection
     scale = 800.0 / max(h, w) if max(h, w) > 800 else 1.0
@@ -58,7 +58,6 @@ def auto_detect_document_corners(image_path: str) -> list:
             if area > (sh * sw * 0.10):  # At least 10% of image area
                 pts = approx.reshape(4, 2).astype("float32")
                 ordered = order_points(pts)
-                # Rescale back to normalized 0.0 - 1.0 range
                 norm_pts = []
                 for pt in ordered:
                     norm_pts.append([float(pt[0] / sw), float(pt[1] / sh)])
@@ -76,30 +75,21 @@ def auto_detect_document_corners(image_path: str) -> list:
 def enhance_document(img_bgr: np.ndarray, mode: str) -> np.ndarray:
     """
     Apply scanner-grade document enhancements to flattened page.
-    Modes:
-      - 'none': Original colors
-      - 'magic_color': Background leveling, shadow removal & text contrast boost
-      - 'bw_scan': Crisp adaptive binary thresholding (pure black & white document)
-      - 'gray_document': Grayscale scan with contrast stretching
     """
     if mode == 'magic_color':
-        # Convert to LAB for luminance illumination leveling
         lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB)
         l, a, b = cv2.split(lab)
-        # Dilate + Median blur background estimation
         bg = cv2.medianBlur(cv2.dilate(l, np.ones((7, 7), np.uint8)), 21)
         diff = 255 - cv2.absdiff(l, bg)
         norm = cv2.normalize(diff, None, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_8U)
         enhanced_lab = cv2.merge([norm, a, b])
         res = cv2.cvtColor(enhanced_lab, cv2.COLOR_LAB2BGR)
-        # Slight sharpening
         kernel = np.array([[0, -0.5, 0], [-0.5, 3.0, -0.5], [0, -0.5, 0]], dtype=np.float32)
         res = cv2.filter2D(res, -1, kernel)
         return res
 
     elif mode == 'bw_scan':
         gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
-        # Gaussian adaptive thresholding
         bw = cv2.adaptiveThreshold(
             gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 25, 12
         )
@@ -107,7 +97,6 @@ def enhance_document(img_bgr: np.ndarray, mode: str) -> np.ndarray:
 
     elif mode == 'gray_document':
         gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
-        # Contrast stretching via CLAHE
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
         stretched = clahe.apply(gray)
         return cv2.cvtColor(stretched, cv2.COLOR_GRAY2BGR)
@@ -118,13 +107,17 @@ def enhance_document(img_bgr: np.ndarray, mode: str) -> np.ndarray:
 def warp_perspective_crop(
     input_path: str,
     output_path: str,
-    points: list,  # 4 points: [[x1, y1], [x2, y2], [x3, y3], [x4, y4]] (normalized 0.0-1.0 or pixel coordinates)
-    aspect_ratio: str = 'auto',  # 'auto' | 'a4_portrait' | 'a4_landscape' | 'us_letter' | 'square_1_1'
-    enhancement: str = 'none',  # 'none' | 'magic_color' | 'bw_scan' | 'gray_document'
+    points: list,
+    aspect_ratio: str = 'auto',
+    enhancement: str = 'none',
+    target_width: Optional[int] = None,
+    target_height: Optional[int] = None,
+    scale_percent: Optional[float] = None,
     quality: int = 95
 ) -> dict:
     """
     Perform 4-point homography perspective transform, crop, deskew, and enhance.
+    Supports all standard print (A4, Letter, Legal) and digital (1:1, 9:16, 16:9, 4:5, 4:3, etc.) ratios.
     """
     img = cv2.imread(input_path)
     if img is None:
@@ -133,7 +126,7 @@ def warp_perspective_crop(
     h, w = img.shape[:2]
     pts = np.array(points, dtype="float32")
 
-    # Check if normalized (0.0 to 1.0) and convert to absolute pixel coordinates
+    # Convert normalized coords (0.0 - 1.0) to pixel coordinates
     if np.max(pts) <= 1.0:
         pts[:, 0] *= w
         pts[:, 1] *= h
@@ -151,15 +144,49 @@ def warp_perspective_crop(
     height_b = np.sqrt(((tl[0] - bl[0]) ** 2) + ((tl[1] - bl[1]) ** 2))
     max_height = max(int(height_a), int(height_b), 100)
 
-    # Adjust dimensions based on target paper aspect ratio
-    if aspect_ratio == 'a4_portrait':
-        max_height = int(max_width * 1.4142)
-    elif aspect_ratio == 'a4_landscape':
-        max_height = int(max_width / 1.4142)
-    elif aspect_ratio == 'us_letter':
-        max_height = int(max_width * (11.0 / 8.5))
-    elif aspect_ratio == 'square_1_1':
-        max_height = max_width
+    # Standard Aspect Ratio Mapping
+    ratio_map = {
+        'a4': 1.0 / 1.4142,
+        'a4_portrait': 1.0 / 1.4142,
+        'a4_landscape': 1.4142,
+        'us_letter': 8.5 / 11.0,
+        'letter': 8.5 / 11.0,
+        'us_legal': 8.5 / 14.0,
+        'legal': 8.5 / 14.0,
+        '1:1': 1.0,
+        'square': 1.0,
+        'square_1_1': 1.0,
+        '9:16': 9.0 / 16.0,
+        '16:9': 16.0 / 9.0,
+        '4:5': 4.0 / 5.0,
+        '4:3': 4.0 / 3.0,
+        '3:4': 3.0 / 4.0,
+        '2:3': 2.0 / 3.0,
+        '3:2': 3.0 / 2.0,
+        '21:9': 21.0 / 9.0,
+    }
+
+    if aspect_ratio in ratio_map:
+        target_w_over_h = ratio_map[aspect_ratio]
+        max_height = max(100, int(max_width / target_w_over_h))
+
+    # Explicit Target Width/Height Override
+    if target_width and target_height:
+        max_width = int(target_width)
+        max_height = int(target_height)
+    elif target_width and not target_height:
+        ratio = max_height / max(max_width, 1)
+        max_width = int(target_width)
+        max_height = int(max_width * ratio)
+    elif target_height and not target_width:
+        ratio = max_width / max(max_height, 1)
+        max_height = int(target_height)
+        max_width = int(max_height * ratio)
+
+    # Percentage scaling
+    if scale_percent and scale_percent > 0:
+        max_width = max(50, int(max_width * (scale_percent / 100.0)))
+        max_height = max(50, int(max_height * (scale_percent / 100.0)))
 
     dst = np.array([
         [0, 0],
@@ -178,7 +205,7 @@ def warp_perspective_crop(
     # Save output
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     ext = os.path.splitext(output_path)[1].lower()
-    if ext in ['.jpg', '.jpeg']:
+    if ext in ('.jpg', '.jpeg'):
         cv2.imwrite(output_path, final_img, [cv2.IMWRITE_JPEG_QUALITY, quality])
     elif ext == '.png':
         cv2.imwrite(output_path, final_img, [cv2.IMWRITE_PNG_COMPRESSION, 4])
@@ -188,9 +215,10 @@ def warp_perspective_crop(
         cv2.imwrite(output_path, final_img)
 
     return {
+        "status": "SUCCESS",
+        "output_path": output_path,
         "width": max_width,
         "height": max_height,
         "aspect_ratio": aspect_ratio,
-        "enhancement": enhancement,
-        "output_path": output_path,
+        "enhancement": enhancement
     }

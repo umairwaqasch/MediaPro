@@ -1,4 +1,4 @@
-﻿import React, { useState } from 'react';
+import React, { useState } from 'react';
 import {
   Volume2,
   X,
@@ -157,7 +157,7 @@ export default function AudioMasteringModal({
             <AudioWaveformCanvas
               videoId={activeVideo.id}
               currentTime={currentTime}
-              duration={activeVideo.duration || 0}
+              duration={activeVideo.metadata?.duration || activeVideo.duration || 0}
               onSeek={onSeek}
               height={100}
             />

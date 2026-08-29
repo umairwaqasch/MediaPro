@@ -31,12 +31,12 @@ export default function GlobalTaskDrawer() {
 
   if (!isDrawerOpen) return null;
 
-  const vramPercent = telemetry.vram_total_gb
-    ? Math.min(100, Math.round((telemetry.vram_used_gb / telemetry.vram_total_gb) * 100))
+  const vramPercent = telemetry?.vram_total_gb
+    ? Math.min(100, Math.round(((telemetry?.vram_used_gb || 0) / telemetry.vram_total_gb) * 100))
     : 0;
 
-  const ramPercent = telemetry.ram_total_gb
-    ? Math.min(100, Math.round((telemetry.ram_used_gb / telemetry.ram_total_gb) * 100))
+  const ramPercent = telemetry?.ram_total_gb
+    ? Math.min(100, Math.round(((telemetry?.ram_used_gb || 0) / telemetry.ram_total_gb) * 100))
     : 0;
 
   return (
@@ -92,9 +92,9 @@ export default function GlobalTaskDrawer() {
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2 text-xs font-bold text-zinc-700 dark:text-zinc-300">
               <Cpu className="w-4 h-4 text-emerald-500" />
-              <span>{telemetry.gpu_name || 'NVIDIA GPU Acceleration'}</span>
+              <span>{telemetry?.gpu_name || 'NVIDIA GPU Acceleration'}</span>
             </div>
-            {telemetry.gpu_temp_c && (
+            {telemetry?.gpu_temp_c && (
               <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:bg-emerald-500/20 dark:text-emerald-400">
                 {telemetry.gpu_temp_c}°C
               </span>

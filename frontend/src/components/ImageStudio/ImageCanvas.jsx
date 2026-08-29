@@ -1,4 +1,4 @@
-﻿import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   ZoomIn,
   ZoomOut,
@@ -77,6 +77,30 @@ export default function ImageCanvas({
       f += ` blur(${Math.min(blur_radius, 10)}px)`;
     }
     return f;
+  };
+
+  const isTransformTab = activeTab === 'transforms';
+  const isPerspectiveTab = activeTab === 'perspective';
+
+  // Check if aspect ratio / crop is actively enabled (not 'none' and not 'original' with null crop)
+  const isCropActive =
+    isTransformTab &&
+    toolState?.aspect_ratio &&
+    toolState.aspect_ratio !== 'none' &&
+    toolState.aspect_ratio !== 'original';
+
+  const handleClearCrop = () => {
+    if (onUpdateToolState) {
+      onUpdateToolState({
+        ...toolState,
+        aspect_ratio: 'none',
+        crop_x: null,
+        crop_y: null,
+        crop_w: null,
+        crop_h: null,
+        blur_bg_padding: false,
+      });
+    }
   };
 
   // Crop rectangle (Normalized 0.0 - 1.0)
@@ -262,9 +286,6 @@ export default function ImageCanvas({
   const origUrl = activeImage.url || `/mediapro/api/image/uploads/${activeImage.filename}`;
   const currUrl = previewImage || origUrl;
 
-  const isTransformTab = activeTab === 'transforms';
-  const isPerspectiveTab = activeTab === 'perspective';
-
   const pinLabels = ['TL', 'TR', 'BR', 'BL'];
   const pinColors = [
     'from-amber-500 to-orange-500',
@@ -299,9 +320,25 @@ export default function ImageCanvas({
 
           {/* Active Overlay Status Badges */}
           {isTransformTab && (
-            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-cyan-500/15 text-cyan-700 dark:text-cyan-300 border border-cyan-500/30 animate-pulse">
-              Interactive Crop Active ({cropPxW} × {cropPxH} px)
-            </span>
+            isCropActive ? (
+              <div className="flex items-center gap-1.5">
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-cyan-500/15 text-cyan-700 dark:text-cyan-300 border border-cyan-500/30 animate-pulse">
+                  Live Crop: {cropPxW} × {cropPxH} px ({toolState?.aspect_ratio})
+                </span>
+                <button
+                  type="button"
+                  onClick={handleClearCrop}
+                  title="Remove Crop & Reset to Full Image"
+                  className="px-1.5 py-0.5 text-[10px] font-bold rounded bg-slate-200 dark:bg-zinc-800 text-slate-600 dark:text-zinc-400 hover:bg-rose-500 hover:text-white transition"
+                >
+                  ✕ Disable Crop
+                </button>
+              </div>
+            ) : (
+              <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 dark:bg-zinc-800 text-slate-600 dark:text-zinc-400 border border-slate-200 dark:border-zinc-700">
+                🖼️ Full Image (No Crop)
+              </span>
+            )
           )}
           {isPerspectiveTab && (
             <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/30 animate-pulse">
@@ -435,9 +472,9 @@ export default function ImageCanvas({
               />
 
               {/* ========================================================================= */}
-              {/* OVERLAY 1: INTERACTIVE 8-HANDLE VISUAL CROP BOX (TRANSFORM TAB)           */}
+              {/* OVERLAY 1: INTERACTIVE 8-HANDLE VISUAL CROP BOX (ONLY WHEN CROP IS ACTIVE) */}
               {/* ========================================================================= */}
-              {isTransformTab && (
+              {isCropActive && (
                 <div className="absolute inset-0 z-30 pointer-events-auto overflow-hidden rounded-lg">
                   {/* Dimmed Background Overlay around Crop Box */}
                   <div
